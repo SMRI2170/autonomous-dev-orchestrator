@@ -103,7 +103,7 @@ class TokenSetupTests(unittest.TestCase):
                         subprocess.TimeoutExpired('security', 15)):
             responses = [subprocess.CompletedProcess([], 44),
                          subprocess.CompletedProcess([], 0), failure,
-                         subprocess.CompletedProcess([], 0, stdout=TOKEN+'\\n'),
+                         subprocess.CompletedProcess([], 0, stdout=TOKEN+'\n'),
                          subprocess.CompletedProcess([], 0)]
             with self.subTest(failure=type(failure).__name__), \
                  patch('subprocess.run', side_effect=responses) as run, \
@@ -119,7 +119,7 @@ class TokenSetupTests(unittest.TestCase):
     def test_add_timeout_reconciles_and_removes_matching_item(self):
         responses = [subprocess.CompletedProcess([], 44),
                      subprocess.TimeoutExpired('security', 30),
-                     subprocess.CompletedProcess([], 0, stdout=TOKEN+'\\n'),
+                     subprocess.CompletedProcess([], 0, stdout=TOKEN+'\n'),
                      subprocess.CompletedProcess([], 0)]
         with patch('subprocess.run', side_effect=responses) as run, \
              patch('getpass.getpass', return_value=TOKEN), \
@@ -149,7 +149,7 @@ class TokenSetupTests(unittest.TestCase):
     def test_add_timeout_never_deletes_another_item(self):
         responses = [subprocess.CompletedProcess([], 44),
                      subprocess.TimeoutExpired('security', 30),
-                     subprocess.CompletedProcess([], 0, stdout='different-token\\n')]
+                     subprocess.CompletedProcess([], 0, stdout='different-token\n')]
         with patch('subprocess.run', side_effect=responses) as run, \
              patch('getpass.getpass', return_value=TOKEN), \
              patch.object(setup_token, 'request', side_effect=[
@@ -169,10 +169,10 @@ class TokenSetupTests(unittest.TestCase):
             if '-i' in args:
                 parsed = shlex.split(kwargs['input'].strip())
                 self.assertEqual(parsed[-1], keychain)
-                self.assertNotIn('\\\\u65e5', kwargs['input'])
+                self.assertIn('日本語', kwargs['input'])
                 return subprocess.CompletedProcess(args, 0)
             if '-w' in args:
-                return subprocess.CompletedProcess(args, 0, stdout=TOKEN+'\\n')
+                return subprocess.CompletedProcess(args, 0, stdout=TOKEN+'\n')
             return subprocess.CompletedProcess(args, 44)
         with patch.object(setup_token, 'login_keychain', return_value=keychain), \
              patch('subprocess.run', side_effect=security), \
