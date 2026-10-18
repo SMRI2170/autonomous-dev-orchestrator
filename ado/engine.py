@@ -128,21 +128,10 @@ class Engine:
             if time.time() - data["review_started"] > self.config["review_timeout_seconds"]:
                 raise Blocked("Review/CI/human-merge deadline exceeded")
             if decision == "WAIT":
-                # Hand off a PR that is merely behind after the base moves,
-                # but never one with conflicts ("dirty") or unknown mergeability.
-                # Such repairs can change the PR head SHA and invalidate evidence.
-                wants_auto = self.config["auto_merge"] and cfg.get("auto_merge", False) and \
-                    "ado:low-risk" in {x["name"] for x in issue["labels"]} and low_risk(data["all_changes"], cfg)
-                base_moved = pr["base"]["sha"] != data["base"]
-                if not wants_auto and base_moved and not pr.get("draft") and \
-                        pr.get("mergeable") is True and pr.get("mergeable_state") == "behind":
-                    reviewed = {**pr, "mergeable": True, "mergeable_state": "clean"}
-                    if judge(reviewed, evidence, cfg)[0] == "PASS":
-                        self.verify_diff(row, data)
-                        if phase != "AWAITING_HUMAN":
-                            self.store.save(row, "AWAITING_HUMAN", data)
-                        self.store.event(row["id"], "BASE_MOVED_HUMAN_HANDOFF")
-                        return
+                # Keep conflicted, behind and unknown-mergeability PRs in REVIEW.
+                # Resolving them can change the head SHA, which would invalidate
+                # the saved job identity and SHA-bound review evidence. Never
+                # synthesize a clean state to bypass the review gate.
                 self.store.event(row["id"], "WAIT", reasons=feedback)
                 return
             if decision == "REPAIR":

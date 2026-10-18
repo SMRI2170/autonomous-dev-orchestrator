@@ -200,11 +200,22 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.tick(), 'AWAITING_HUMAN')
         self.assertEqual(self.gh.merge_calls, 0)
 
-    def test_base_movement_nonclean_hands_off_after_review(self):
+    def test_base_movement_behind_stays_in_review_even_after_approval(self):
         self.publish()
         self.gh.base = 'c' * 40
         self.gh.mergeable_state = "behind"
-        self.assertEqual(self.tick(), "AWAITING_HUMAN")
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_behind_pr_never_hands_off_after_ci_and_approval(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable_state = "behind"
+        self.gh.review = "MISSING"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.gh.review = "PASS"
+        self.assertEqual(self.tick(), "REVIEW")
         self.assertEqual(self.gh.merge_calls, 0)
 
     def test_base_movement_not_clean_still_waits_for_ci_and_review(self):
