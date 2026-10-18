@@ -13,3 +13,32 @@ reviews:
     drafts: false
     base_branches: []
     labels: []
+
+  path_instructions:
+    - path: "ado/**"
+      instructions: |
+        Review state-machine transitions, persisted job state, idempotency and replay safety.
+        Check that API failures, timeouts, interrupted writes, and stale PR/head SHAs fail closed.
+        Verify retry and model-call budgets, review evidence tied to the current head SHA,
+        and that no branch or PR can bypass the auto-merge safety gates.
+        Report concrete correctness or security defects with reproducible conditions;
+        do not treat speculative hardening ideas as release blockers.
+
+    - path: "scripts/**"
+      instructions: |
+        Review Keychain credentials, GitHub token permissions, CLI process execution,
+        launchd configuration, and setup/rollback paths.
+        Prevent secrets in source control, command arguments, logs, traceback messages,
+        or child-process environments not meant to receive them.
+        Check subprocess quoting, least-privilege file access, timeout handling,
+        non-default macOS Keychain cases, and cleanup on partial failure.
+        Ground findings in code paths and explain the concrete failure mode.
+
+    - path: "tests/**"
+      instructions: |
+        Verify that new behavior is covered by meaningful assertions, not just happy paths.
+        Prioritize regressions for state recovery, duplicate execution, stale reviews,
+        permission failures, timeout/output limits, sandbox boundaries, and secret leakage.
+        Ensure mocks model the relevant GitHub and macOS behavior and that tests would
+        fail if the protected behavior regressed.
+        Suggest focused test cases when the current change leaves a material gap.
