@@ -19,8 +19,9 @@ def eligible(issue, cfg):
 
 
 class Engine:
-    def __init__(self, config, store, github, agent):
+    def __init__(self, config, store, github, agent, reviewer=None):
         self.config, self.store, self.gh, self.agent = config, store, github, agent
+        self.reviewer = reviewer
         self.repos = {r["name"]: r for r in config["repositories"]}
 
     def specification(self, repo, issue):
@@ -71,8 +72,8 @@ class Engine:
             data = json.loads(row["data"])
             phase = row["state"]
             try:
-                if phase == "BUILDING":
-                    raise Blocked("Interrupted model call; automatic replay forbidden")
+                if phase in ("BUILDING", "REVIEWING"):
+                    raise Blocked("Interrupted model/review call; automatic replay forbidden")
                 self.step(row, data)
             except Exception as exc:
                 # Fail closed on transport failure, quota failure, policy failure or unexpected bug.
@@ -124,10 +125,32 @@ class Engine:
             self.publish(row, data)
         elif phase in ("REVIEW", "AWAITING_HUMAN"):
             evidence = self.gh.evidence(repo, pr)
-            decision, feedback = judge(pr, evidence, cfg)
+            current_digest = digest(data["all_changes"])
+            decision, feedback = judge(pr, evidence, cfg, data.get("minimax_review"), current_digest)
             if time.time() - data["review_started"] > self.config["review_timeout_seconds"]:
                 raise Blocked("Review/CI/human-merge deadline exceeded")
             if decision == "WAIT":
+                if cfg.get("review_provider", "coderabbit") == "minimax" and phase == "REVIEW" and \
+                        feedback == ["missing MiniMax review at current SHA"] and \
+                        not pr.get("draft") and pr.get("mergeable") is True and \
+                        pr.get("mergeable_state") == "clean":
+                    if self.reviewer is None:
+                        raise Blocked("MiniMax reviewer unavailable; no fallback")
+                    self.verify_diff(row, data)
+                    # Persist the in-flight review BEFORE using the subscription.
+                    # Interrupted calls cannot be automatically replayed.
+                    self.store.save(row, "REVIEWING", data)
+                    originals, _ = self.gh.snapshot(repo, data["base"], cfg)
+                    result = self.reviewer.review(issue, originals, data["all_changes"], data["head"])
+                    # The remote head and diff must remain identical during review.
+                    fresh_pr = self.gh.pr(repo, data["pr"])
+                    self.verify_pr(row, data, fresh_pr)
+                    self.verify_diff(row, data)
+                    data["minimax_review"] = {
+                        "sha": data["head"], "changes_digest": current_digest,
+                        "verdict": result["verdict"], "findings": result["findings"]}
+                    self.store.save(row, "REVIEW", data)
+                    return
                 # A previously clean, handed-off PR may regress when the base moves.
                 # A human would have to change the head to fix "behind"/"dirty",
                 # invalidating the job's SHA-bound identity. Revoke the handoff
@@ -153,6 +176,8 @@ class Engine:
             self.verify_diff(row, data)
             auto = self.config["auto_merge"] and cfg.get("auto_merge", False) and \
                 "ado:low-risk" in {x["name"] for x in issue["labels"]} and low_risk(data["all_changes"], cfg)
+            if auto and cfg.get("review_provider") == "minimax":
+                raise Blocked("MiniMax self-review never authorizes auto-merge")
             if not auto:
                 if phase != "AWAITING_HUMAN":
                     self.store.save(row, "AWAITING_HUMAN", data)
