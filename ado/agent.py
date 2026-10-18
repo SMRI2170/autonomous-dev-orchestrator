@@ -82,10 +82,13 @@ class MiniMax:
                                         preexec_fn=limits)
                 try:
                     proc.communicate(prompt(issue, files, repo_config, feedback), timeout=cfg.get("timeout_seconds", 600))
-                except BaseException:
-                    os.killpg(proc.pid, signal.SIGKILL)
+                finally:
+                    # Also terminate any surviving runtime children after a normal exit.
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                     proc.wait()
-                    raise
                 if proc.returncode:
                     raise Blocked("MiniMax failed or sandbox denied access; verify CLI contract/login")
                 out.seek(0)

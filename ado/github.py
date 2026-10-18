@@ -37,6 +37,8 @@ class GitHub:
             items = data[key] if key else data
             output.extend(items)
             if len(items) < 100:
+                if key and data.get("total_count", len(output)) > len(output):
+                    raise Blocked("API returned incomplete evidence despite pagination")
                 return output
         raise Blocked("Pagination limit exceeded; refusing incomplete evidence")
 

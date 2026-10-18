@@ -54,3 +54,11 @@ class ReviewTests(unittest.TestCase):
         for value in [None, False]:
             self.pr["mergeable"] = value
             self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "WAIT")
+
+    def test_comment_does_not_clear_previous_human_change_request(self):
+        self.ev["reviews"] += [
+            {"id": 2, "user": {"login": "human", "type": "User"}, "commit_id": "head",
+             "state": "CHANGES_REQUESTED", "body": "Must fix"},
+            {"id": 3, "user": {"login": "human", "type": "User"}, "commit_id": "head",
+             "state": "COMMENTED", "body": "Another comment"}]
+        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "REPAIR")
