@@ -83,7 +83,7 @@ from ado.minimax_review import MiniMaxReviewer
 
 cfg = load("config.toml")
 result = MiniMaxReviewer(MiniMax(cfg["minimax"])).review(
-    {"title": "Explain PR", "body": "## Acceptance criteria\\nExplain what PR means."},
+    {"title": "Explain PR", "body": "## Acceptance criteria\nExplain what PR means."},
     {"docs/example.md": "PR means private repository."},
     {"docs/example.md": "PR means pull request."},
     "a" * 40,
@@ -107,7 +107,7 @@ PY
 
 `run --once`を複数回実行すると、変更生成→PR公開→レビュー確認と進みます。PR本文の編集・コメントはworkerの設定変更やマージ許可には使われません。PRに`Closes #…`を付けず、workerがマージ済みを確認してからIssueを完了します。
 
-## 6. 停止・復旧
+## 7. 停止・復旧
 
 Ctrl-Cまたはlaunchd停止でポーリングを止めます。BUILDING中断は予算を消費済みとして保存し、自動リプレイしません。Blockedの原因を確認し、再開可能なAPI送信段階のみ明示して復旧できます。人間への引き継ぎ後にPRが `behind` / `dirty` へ変化した場合は、安全のためジョブをBlockedにします。headの更新は保存済みSHAの保証を無効化するため、このジョブを再開せず、PRの更新・マージ・Issueのクローズを人間が確認して行ってください。
 
@@ -115,7 +115,7 @@ Ctrl-Cまたはlaunchd停止でポーリングを止めます。BUILDING中断�
 .venv/bin/python -m ado --config config.toml retry 1
 ```
 
-この操作は修正回数をリセットしません。BUILDING中断と3回の修正上限到達は再開不可です。人間がPRを確認・閉鎖するなど整理し、新しいIssueで依頼してください。期限切れの既存reviewを再試行しても期限は延長しません。レビュー待ち開始時刻は新しい修正commitの公開時だけ更新します。
+この操作は修正回数をリセットしません。BUILDING/REVIEWING中断と3回の修正上限到達は再開不可です。人間がPRを確認・閉鎖するなど整理し、新しいIssueで依頼してください。期限切れの既存reviewを再試行しても期限は延長しません。レビュー待ち開始時刻は新しい修正commitの公開時だけ更新します。
 
 publishのHTTP結果が失われた場合、保存した親SHA・内容・日時で同じcommitを作り、既存refとPRを照合します。別のプロセスが作ったブランチやPRと衝突するとBlockedです。`.state`やSQLiteを削除して再実行する運用は冪等性を失うため避けてください。
 
