@@ -85,7 +85,7 @@ stdinで指示と許可済みファイルのスナップショットを渡しま
 
 ## 6. 停止・復旧
 
-Ctrl-Cまたはlaunchd停止でポーリングを止めます。BUILDING中断は予算を消費済みとして保存し、自動リプレイしません。Blockedの原因を確認し、再開可能なAPI送信段階のみ明示して復旧できます。
+Ctrl-Cまたはlaunchd停止でポーリングを止めます。BUILDING中断は予算を消費済みとして保存し、自動リプレイしません。Blockedの原因を確認し、再開可能なAPI送信段階のみ明示して復旧できます。人間への引き継ぎ後にPRが `behind` / `dirty` へ変化した場合は、安全のためジョブをBlockedにします。headの更新は保存済みSHAの保証を無効化するため、このジョブを再開せず、PRの更新・マージ・Issueのクローズを人間が確認して行ってください。
 
 ```sh
 .venv/bin/python -m ado --config config.toml retry 1

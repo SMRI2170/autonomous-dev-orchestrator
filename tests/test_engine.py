@@ -208,6 +208,38 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.tick(), "REVIEW")
         self.assertEqual(self.gh.merge_calls, 0)
 
+    def test_handoff_behind_regression_blocks_with_manual_recovery(self):
+        self.publish()
+        self.assertEqual(self.tick(), "AWAITING_HUMAN")
+        self.gh.base = 'c' * 40
+        self.gh.mergeable_state = "behind"
+        self.assertEqual(self.tick(), "BLOCKED")
+        row = self.store.get("owner/project", 1)
+        data = json.loads(row["data"])
+        self.assertIn("Manual handoff invalidated", data["reason"])
+        self.assertEqual(self.agent.calls, 1)
+        self.assertEqual(self.gh.close_calls, 0)
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_handoff_conflict_regression_blocks_without_head_update(self):
+        self.publish()
+        self.assertEqual(self.tick(), "AWAITING_HUMAN")
+        self.gh.base = 'c' * 40
+        self.gh.mergeable = False
+        self.gh.mergeable_state = "dirty"
+        self.assertEqual(self.tick(), "BLOCKED")
+        self.assertEqual(self.gh.close_calls, 0)
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_handoff_transient_unknown_does_not_block(self):
+        self.publish()
+        self.assertEqual(self.tick(), "AWAITING_HUMAN")
+        self.gh.base = 'c' * 40
+        self.gh.mergeable = None
+        self.gh.mergeable_state = "unknown"
+        self.assertEqual(self.tick(), "AWAITING_HUMAN")
+        self.assertEqual(self.gh.close_calls, 0)
+
     def test_behind_pr_never_hands_off_after_ci_and_approval(self):
         self.publish()
         self.gh.base = 'c' * 40

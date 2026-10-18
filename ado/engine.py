@@ -128,10 +128,15 @@ class Engine:
             if time.time() - data["review_started"] > self.config["review_timeout_seconds"]:
                 raise Blocked("Review/CI/human-merge deadline exceeded")
             if decision == "WAIT":
+                # A previously clean, handed-off PR may regress when the base moves.
+                # A human would have to change the head to fix "behind"/"dirty",
+                # invalidating the job's SHA-bound identity. Revoke the handoff
+                # explicitly rather than leaving an impossible merge pending.
+                if phase == "AWAITING_HUMAN" and pr.get("mergeable_state") in ("behind", "dirty"):
+                    raise Blocked("Manual handoff invalidated: PR became behind or conflicted; "
+                                  "resolve PR and issue manually; do not resume this job")
                 # Keep conflicted, behind and unknown-mergeability PRs in REVIEW.
-                # Resolving them can change the head SHA, which would invalidate
-                # the saved job identity and SHA-bound review evidence. Never
-                # synthesize a clean state to bypass the review gate.
+                # Never synthesize a clean state to bypass the review gate.
                 self.store.event(row["id"], "WAIT", reasons=feedback)
                 return
             if decision == "REPAIR":
