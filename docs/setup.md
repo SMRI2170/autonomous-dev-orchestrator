@@ -4,7 +4,7 @@
 
 - Mac mini M2 16GB、macOS、Python 3.11以上、GitHub CLI。Intel/macOSやLinuxでのライブAI実行は対象外。
 - MiniMax Codeの既存契約・利用枠。Codexは必要時の手動補助のみ。
-- 対象は公開GitHubリポジトリ。標準ホストRunnerを使うCIと、CodeRabbit GitHub Appを事前に接続する。
+- 対象は公開GitHubリポジトリで、標準ホストRunnerを使うCIを用意する。CodeRabbit GitHub Appの接続は`review_provider = "coderabbit"`の場合のみ必須。MiniMaxレビューでは不要。
 - 専用のmacOS一般ユーザーで運用することを推奨。対象コードの実行環境と認証を分ける。
 
 このリポジトリは既存プロジェクトへファイルを配布・変更しません。以下の対象側の作業は運用者がレビューして手動実施します。

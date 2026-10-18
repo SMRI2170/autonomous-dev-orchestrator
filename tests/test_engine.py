@@ -73,6 +73,23 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.tick(), "REVIEW")
         reviewer.review.assert_not_called()
 
+    def test_minimax_snapshot_failure_can_retry_before_model_call(self):
+        reviewer = self.setup_minimax_review()
+        self.publish()
+        original_snapshot = self.gh.snapshot
+        def fail_snapshot(*args):
+            raise Blocked("temporary GitHub snapshot failure")
+        self.gh.snapshot = fail_snapshot
+        self.assertEqual(self.tick(), "BLOCKED")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(data["resume"], "REVIEW")
+        reviewer.review.assert_not_called()
+        self.gh.snapshot = original_snapshot
+        self.store.retry(1)
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(reviewer.review.call_count, 1)
+        self.assertEqual(self.gh.merge_calls, 0)
+
     def test_minimax_review_interruption_is_not_replayed(self):
         reviewer = self.setup_minimax_review()
         reviewer.review.side_effect = RuntimeError("interrupted")

@@ -137,10 +137,11 @@ class Engine:
                     if self.reviewer is None:
                         raise Blocked("MiniMax reviewer unavailable; no fallback")
                     self.verify_diff(row, data)
+                    # Recoverable GitHub reads must happen before REVIEWING is persisted.
+                    originals, _ = self.gh.snapshot(repo, data["base"], cfg)
                     # Persist the in-flight review BEFORE using the subscription.
                     # Interrupted calls cannot be automatically replayed.
                     self.store.save(row, "REVIEWING", data)
-                    originals, _ = self.gh.snapshot(repo, data["base"], cfg)
                     result = self.reviewer.review(issue, originals, data["all_changes"], data["head"])
                     # The remote head and diff must remain identical during review.
                     fresh_pr = self.gh.pr(repo, data["pr"])
