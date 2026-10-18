@@ -4,6 +4,7 @@ import os
 import sys
 import time
 from .agent import MiniMax
+from .minimax_review import MiniMaxReviewer
 from .config import load
 from .engine import Engine
 from .github import GitHub
@@ -42,9 +43,11 @@ def main():
                               "auto_merge": cfg["auto_merge"], "repository_count": len(cfg["repositories"]),
                               "explicit_github_token": bool(os.environ.get("GH_TOKEN")),
                               "subscription_confirmed": cfg.get("minimax", {}).get("subscription_confirmed", False),
+                              "review_providers": {r["name"]: r["review_provider"] for r in cfg["repositories"]},
                               "projects_write_supported": False, "codex_automatic_supported": False}, indent=2))
         else:
-            engine = Engine(cfg, store, GitHub(cfg["dry_run"]), MiniMax(cfg.get("minimax", {})))
+            model = MiniMax(cfg.get("minimax", {}))
+            engine = Engine(cfg, store, GitHub(cfg["dry_run"]), model, MiniMaxReviewer(model))
             while True:
                 print(redact(json.dumps(engine.tick(), ensure_ascii=False)), flush=True)
                 if args.once:

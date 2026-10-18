@@ -48,6 +48,10 @@ class MiniMax:
         self.config = config
 
     def generate(self, issue, files, repo_config, feedback):
+        return parse_changes(self.invoke(prompt(issue, files, repo_config, feedback)))
+
+    def invoke(self, instruction):
+        """Run a fresh tool-less, Seatbelt-confined CLI invocation. No shell or API fallback."""
         cfg = self.config
         if platform.system() != "Darwin":
             raise Blocked("Live MiniMax adapter requires macOS Seatbelt")
@@ -84,7 +88,7 @@ class MiniMax:
                                     start_new_session=True, preexec_fn=limits)
             try:
                 deadline = time.monotonic() + cfg.get("timeout_seconds", 600)
-                payload = prompt(issue, files, repo_config, feedback).encode("utf-8")
+                payload = instruction.encode("utf-8")
                 offset, total = 0, 0
                 stdout_chunks = []
                 with selectors.DefaultSelector() as selector:
@@ -142,7 +146,7 @@ class MiniMax:
                     envelope = json.loads(b"".join(stdout_chunks).decode("utf-8"))
                     if envelope["status"] != "succeeded" or not isinstance(envelope["output"], str):
                         raise ValueError("Invalid envelope")
-                    return parse_changes(envelope["output"])
+                    return envelope["output"]
                 except (KeyError, ValueError, TypeError) as exc:
                     raise Blocked("Unsupported MiniMax output; no permissive fallback") from exc
             finally:
