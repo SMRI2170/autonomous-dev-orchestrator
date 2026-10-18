@@ -62,3 +62,5 @@ Mac mini M2 / 16GBのDeveloper/autonomous-dev-orchestratorに配置。Homebrew P
 - CodeRabbit承認がまだない段階はREVIEWを維持し、merge/Issue closeは行っていません。
 
 認証情報はリポジトリ・TOML・plist・監査イベントに保存せず、MiniMax用専用profileとmacOS login Keychainにのみ保管しています。
+
+CodeRabbit Appのこの新規repoへの接続もユーザーが完了し、PR #6のレビュー開始を確認しました。既存PR #5には固定の`@coderabbitai review`を一度だけ投稿してレビューを依頼しました。正式承認用のrequest_changes_workflowをrepo設定と配布用サンプルに追加しています。作者が承認コマンドで自身のPRを通す機能は無効です。
