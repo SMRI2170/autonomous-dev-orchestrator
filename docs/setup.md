@@ -30,7 +30,7 @@ Mac標準のPython 3.9では動きません。プロジェクトで管理したP
 
 Actions Write、Workflows Write、Projects Write、organization全体の権限、管理書込みは不要です。ルールのバイパス権限を付けないでください。Branch protectionを設定する操作はこのツールに実装していません。Contents WriteはGitHub側では専用ブランチだけに限定できないため、default branchを保護してください。
 
-一時的な手動実行ではシェルの非表示入力等でGH_TOKENを渡し、終了後に解除します。トークンを設定TOML、コマンドの履歴、plist、リポジトリに書かないでください。常駐用は[Keychainの手順](launchd.md)を利用します。macOSでは`python scripts/setup_token.py --config config.toml`で非表示入力し、`github_login`（任意）と設定に登録した全repoのmetadata/contents権限を確認してKeychainへ保存できます。Issues/PRの書込み権限は読み取りAPIで証明できないため、UIで確認し、制御したpilotで実測します。既存のADO項目は上書きしません。新規保存後の読戻しに失敗した場合は、その項目をロールバックします。トークンを引数に渡さず、Keychain操作のstdinで受け渡します。
+一時的な手動実行ではシェルの非表示入力等でGH_TOKENを渡し、終了後に解除します。トークンを設定TOML、コマンドの履歴、plist、リポジトリに書かないでください。常駐用は[Keychainの手順](launchd.md)を利用します。macOSでは`python scripts/setup_token.py --config config.toml`で非表示入力し、`github_login`（任意）と設定に登録した全repoの存在・公開状態を確認してログインKeychainへ保存できます。リポジトリのPAT選択範囲とContents/Issues/PRの書込み権限は読み取りAPIでは証明できないため、GitHubの権限設定UIで確認し、制御したpilotで実測します。既存のADO項目は上書きしません。新規保存後の読戻しに失敗した場合は、その項目をロールバックします。トークンを引数に渡さず、Keychain操作のstdinで受け渡します。
 
 ## 3. 対象リポジトリの準備（手動）
 

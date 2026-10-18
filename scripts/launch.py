@@ -10,10 +10,11 @@ if len(sys.argv) != 2 or not Path(sys.argv[1]).is_absolute():
     raise SystemExit("An absolute config path is required")
 sys.path.insert(0, str(root))
 from ado.config import load
+from ado.keychain import login_keychain
 cfg = load(sys.argv[1])
 env = {k: v for k, v in os.environ.items() if k in ("HOME", "PATH", "LANG")}
 if not cfg["dry_run"]:
-    result = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", "ado.github-token", "-a", "ado", "-w"],
+    result = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", "ado.github-token", "-a", "ado", "-w", login_keychain()],
                             capture_output=True, text=True, timeout=15)
     if result.returncode:
         raise SystemExit("ADO token unavailable in login Keychain")

@@ -123,10 +123,26 @@ class Engine:
         elif phase == "PUBLISHING":
             self.publish(row, data)
         elif phase in ("REVIEW", "AWAITING_HUMAN"):
-            decision, feedback = judge(pr, self.gh.evidence(repo, pr), cfg)
+            evidence = self.gh.evidence(repo, pr)
+            decision, feedback = judge(pr, evidence, cfg)
             if time.time() - data["review_started"] > self.config["review_timeout_seconds"]:
                 raise Blocked("Review/CI/human-merge deadline exceeded")
             if decision == "WAIT":
+                # A moved base can make a previously reviewed PR "behind"/"dirty".
+                # For human-only changes, hand off once *all* SHA-bound evidence
+                # passes, without relaxing any automatic-merge preconditions.
+                wants_auto = self.config["auto_merge"] and cfg.get("auto_merge", False) and \
+                    "ado:low-risk" in {x["name"] for x in issue["labels"]} and low_risk(data["all_changes"], cfg)
+                base_moved = pr["base"]["sha"] != data["base"]
+                if not wants_auto and base_moved and not pr.get("draft") and \
+                        (pr.get("mergeable") is not True or pr.get("mergeable_state") != "clean"):
+                    reviewed = {**pr, "mergeable": True, "mergeable_state": "clean"}
+                    if judge(reviewed, evidence, cfg)[0] == "PASS":
+                        self.verify_diff(row, data)
+                        if phase != "AWAITING_HUMAN":
+                            self.store.save(row, "AWAITING_HUMAN", data)
+                        self.store.event(row["id"], "BASE_MOVED_HUMAN_HANDOFF")
+                        return
                 self.store.event(row["id"], "WAIT", reasons=feedback)
                 return
             if decision == "REPAIR":

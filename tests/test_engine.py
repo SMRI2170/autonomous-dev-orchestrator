@@ -200,6 +200,29 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.tick(), 'AWAITING_HUMAN')
         self.assertEqual(self.gh.merge_calls, 0)
 
+    def test_base_movement_nonclean_hands_off_after_review(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable_state = "behind"
+        self.assertEqual(self.tick(), "AWAITING_HUMAN")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_not_clean_still_waits_for_ci_and_review(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable_state = "dirty"
+        self.gh.review = "MISSING"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.gh.review = "PASS"
+        self.gh.ci = "neutral"
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_nonclean_without_base_movement_does_not_handoff(self):
+        self.publish()
+        self.gh.mergeable_state = "dirty"
+        self.assertEqual(self.tick(), "REVIEW")
+
     def test_base_movement_blocks_auto_merge(self):
         self.cfg['auto_merge'] = True
         self.cfg['repositories'][0]['auto_merge'] = True

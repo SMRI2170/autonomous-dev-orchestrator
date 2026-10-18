@@ -15,6 +15,8 @@ class TokenSetupTests(unittest.TestCase):
         self.patch_config.start(); self.addCleanup(self.patch_config.stop)
         self.patch_platform = patch('sys.platform', 'darwin')
         self.patch_platform.start(); self.addCleanup(self.patch_platform.stop)
+        self.patch_keychain = patch.object(setup_token, "login_keychain", return_value="/Users/test/Library/Keychains/login.keychain-db")
+        self.patch_keychain.start(); self.addCleanup(self.patch_keychain.stop)
 
     def test_existing_token_is_never_overwritten(self):
         with patch('subprocess.run', return_value=subprocess.CompletedProcess([], 0)), \
@@ -45,7 +47,8 @@ class TokenSetupTests(unittest.TestCase):
         setup_token.load.assert_called_with('another.toml')
         self.assertEqual(api.call_args_list[-1].args[1], 'repos/SMRI2170/second')
         self.assertNotIn(TOKEN, output.getvalue())
-        self.assertIn('Issues/PR write permissions need', output.getvalue())
+        self.assertIn("Contents/Issues/PR write permissions require", output.getvalue())
+        self.assertTrue(all("/Users/test/Library/Keychains/login.keychain-db" in str(args) or "-i" in args for args, _ in calls))
         self.assertTrue(any(TOKEN in kwargs.get('input', '') for _, kwargs in calls))
         for args, _ in calls:
             self.assertNotIn(TOKEN, ' '.join(args))
@@ -62,10 +65,27 @@ class TokenSetupTests(unittest.TestCase):
         with patch('subprocess.run', return_value=subprocess.CompletedProcess([],44)) as run, \
              patch('getpass.getpass', return_value=TOKEN), patch.object(setup_token, 'request', side_effect=[
                 {'login':'SMRI2170'},{'full_name':'SMRI2170/example','private':False,'permissions':{'push':True}},
-                {'full_name':'SMRI2170/second','private':False,'permissions':{'push':False}}]), \
+                {'full_name':'SMRI2170/second','private':True,'permissions':{'push':False}}]), \
              contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             setup_token.main([])
         self.assertEqual(run.call_count,1)
+
+    def test_missing_repositories_produces_controlled_error(self):
+        self.config.pop('repositories')
+        with self.assertRaisesRegex(SystemExit, "Configure at least one repository"):
+            setup_token.main([])
+
+    def test_false_push_flag_does_not_pretend_to_validate_pat_write(self):
+        with patch('subprocess.run', side_effect=[
+                subprocess.CompletedProcess([],44),
+                subprocess.CompletedProcess([],0),
+                subprocess.CompletedProcess([],0,stdout=TOKEN+'\\n'),
+            ]), patch('getpass.getpass',return_value=TOKEN), \
+            patch.object(setup_token,'request',side_effect=[
+                {'login':'SMRI2170'}, {'full_name':'SMRI2170/example','private':False,
+                                       'permissions':{'push':False}}]), \
+            contextlib.redirect_stdout(io.StringIO()):
+            setup_token.main([])
 
     def test_failed_readback_rolls_back_new_item(self):
         for failure in (subprocess.CompletedProcess([],1,stdout=''), subprocess.TimeoutExpired('security',15)):

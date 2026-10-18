@@ -10,6 +10,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from ado.keychain import login_keychain
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ado.config import load
 
@@ -32,12 +34,13 @@ def main(argv=None):
     parser.add_argument('--config', default='config.toml')
     args = parser.parse_args(argv)
     config = load(args.config)
-    targets = [repo['name'] for repo in config['repositories']]
+    targets = [repo['name'] for repo in config.get('repositories', [])]
     if not targets:
         raise SystemExit("Configure at least one repository before storing a token")
     if sys.platform != "darwin":
         raise SystemExit("macOS login Keychain is required")
-    exists = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", SERVICE, "-a", ACCOUNT],
+    keychain = login_keychain()
+    exists = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", SERVICE, "-a", ACCOUNT, keychain],
                             capture_output=True, timeout=15)
     if exists.returncode == 0:
         raise SystemExit("An ADO token already exists. It was not overwritten.")
@@ -54,11 +57,11 @@ def main(argv=None):
         raise SystemExit("GitHub account mismatch; token was not stored")
     for target in targets:
         repo = request(token, "repos/" + target)
-        if repo.get('full_name', '').casefold() != target.casefold() or repo.get("private") is not False or not repo.get("permissions", {}).get("push"):
-            raise SystemExit("Configured repository write access mismatch; token was not stored")
+        if repo.get('full_name', '').casefold() != target.casefold() or repo.get("private") is not False:
+            raise SystemExit("Configured repository visibility mismatch; token was not stored")
     # security's interactive parser receives the credential via stdin, never argv.
     # Validation above permits only ASCII alphanumerics and underscore in the value.
-    commands = f'add-generic-password -a "{ACCOUNT}" -s "{SERVICE}" -w "{token}"\n'
+    commands = f'add-generic-password -a "{ACCOUNT}" -s "{SERVICE}" -w "{token}" {json.dumps(keychain)}\n'
     added, verified = False, False
     try:
         result = subprocess.run(["/usr/bin/security", "-i"], input=commands, text=True,
@@ -66,19 +69,19 @@ def main(argv=None):
         if result.returncode:
             raise RuntimeError("Keychain did not confirm creation; no existing item was overwritten")
         added = True
-        readback = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
+        readback = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w", keychain],
                                   capture_output=True, text=True, timeout=15)
         if readback.returncode or readback.stdout.strip() != token:
             raise RuntimeError("Keychain readback verification failed")
         verified = True
     finally:
         if added and not verified:
-            rollback = subprocess.run(["/usr/bin/security", "delete-generic-password", "-s", SERVICE, "-a", ACCOUNT],
+            rollback = subprocess.run(["/usr/bin/security", "delete-generic-password", "-s", SERVICE, "-a", ACCOUNT, keychain],
                                       capture_output=True, timeout=15)
             if rollback.returncode:
                 raise RuntimeError("Unverified new Keychain item requires manual removal")
     print("ADO token saved to login Keychain for " + user['login'] + ".")
-    print("Repository metadata/push access checked. Issues/PR write permissions need UI confirmation and a controlled pilot.")
+    print("Account and public repository visibility checked. Repository selection and Contents/Issues/PR write permissions require UI confirmation and a controlled pilot.")
     print("dry-run and auto-merge settings were not changed.")
 
 
