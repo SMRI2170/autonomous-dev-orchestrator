@@ -1,0 +1,15 @@
+# Install manually in the TARGET repository only after reviewing its CI behavior.
+# Replace <REVIEWED_COMMIT_SHA> with this orchestrator's exact reviewed commit SHA.
+name: ADO CI
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  checks:
+    uses: SMRI2170/autonomous-dev-orchestrator/.github/workflows/reusable-python.yml@<REVIEWED_COMMIT_SHA>
+    permissions:
+      contents: read
+# This runs unittest discovery in the CALLER repository, not orchestrator tests.
+# Configure required_checks.name using the actual check name returned by GitHub.
+# Never use pull_request_target, secrets: inherit, or a self-hosted runner here.

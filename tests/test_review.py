@@ -1,0 +1,56 @@
+import unittest
+from ado.review import judge
+from tests.fakes import GitHub, repo_config
+
+
+class ReviewTests(unittest.TestCase):
+    def setUp(self):
+        self.gh = GitHub()
+        self.gh.head = "head"
+        self.pr = self.gh.pr("owner/project", 10)
+        self.ev = self.gh.evidence("owner/project", self.pr)
+        self.cfg = repo_config()
+
+    def test_valid_evidence_passes(self):
+        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "PASS")
+
+    def test_stale_ci_and_spoofed_app_do_not_pass(self):
+        for field, value in [("head_sha", "old"), ("app", {"slug": "fake"}), ("status", "in_progress")]:
+            with self.subTest(field=field):
+                ev = self.gh.evidence("owner/project", self.pr)
+                ev["checks"][0][field] = value
+                self.assertEqual(judge(self.pr, ev, self.cfg)[0], "WAIT")
+
+    def test_latest_rerun_failure_beats_old_success(self):
+        self.ev["checks"].append({**self.ev["checks"][0], "id": 2, "conclusion": "failure"})
+        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "REPAIR")
+
+    def test_bot_comment_or_human_spoof_not_approval(self):
+        for state, user_type in [("COMMENTED", "Bot"), ("APPROVED", "User"), ("DISMISSED", "Bot")]:
+            self.ev["reviews"][0].update(state=state)
+            self.ev["reviews"][0]["user"]["type"] = user_type
+            self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "WAIT")
+
+    def test_unresolved_thread_repairs(self):
+        self.ev["threads"] = [{"isResolved": False, "isOutdated": False,
+                                "comments": {"nodes": [{"body": "fix this", "commit": {"oid": "head"}}]}}]
+        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "REPAIR")
+        self.ev["threads"][0]["isOutdated"] = True
+        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "WAIT")
+        self.ev["threads"][0]["isResolved"] = True
+        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "PASS")
+
+    def test_human_changes_requested_remains_veto(self):
+        self.ev["reviews"].append({"id": 2, "user": {"login": "human", "type": "User"},
+                                    "commit_id": "old", "state": "CHANGES_REQUESTED", "body": "fix"})
+        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "WAIT")
+
+    def test_missing_ci_does_not_burn_repairs(self):
+        self.ev["checks"] = []
+        self.ev["reviews"][0]["state"] = "CHANGES_REQUESTED"
+        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "WAIT")
+
+    def test_unknown_mergeability_never_passes(self):
+        for value in [None, False]:
+            self.pr["mergeable"] = value
+            self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "WAIT")
