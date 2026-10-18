@@ -60,25 +60,49 @@ def main(argv=None):
             raise SystemExit("Configured repository visibility mismatch; token was not stored")
     # security's interactive parser receives the credential via stdin, never argv.
     # Validation above permits only ASCII alphanumerics and underscore in the value.
-    commands = f'add-generic-password -a "{ACCOUNT}" -s "{SERVICE}" -w "{token}" {json.dumps(keychain)}\n'
-    added, verified = False, False
+    # security -i has its own tokenizer (not a shell). Preserve non-ASCII paths,
+    # escaping only quote and backslash characters inside the quoted argument.
+    quoted_keychain = '"' + keychain.replace('\\', '\\\\').replace('"', '\\"') + '"'
+    commands = f'add-generic-password -a "{ACCOUNT}" -s "{SERVICE}" -w "{token}" {quoted_keychain}\n'
+    attempted, verified = False, False
     try:
-        result = subprocess.run(["/usr/bin/security", "-i"], input=commands, text=True,
-                                capture_output=True, timeout=30)
+        # Mark as attempted BEFORE the call: a timeout can occur after creation.
+        attempted = True
+        try:
+            result = subprocess.run(["/usr/bin/security", "-i"], input=commands, text=True,
+                                    capture_output=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Keychain add timed out; checking unverified item") from None
         if result.returncode:
-            raise RuntimeError("Keychain did not confirm creation; no existing item was overwritten")
-        added = True
+            raise RuntimeError("Keychain did not confirm creation")
         readback = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w", keychain],
                                   capture_output=True, text=True, timeout=15)
         if readback.returncode or readback.stdout.strip() != token:
             raise RuntimeError("Keychain readback verification failed")
         verified = True
     finally:
-        if added and not verified:
-            rollback = subprocess.run(["/usr/bin/security", "delete-generic-password", "-s", SERVICE, "-a", ACCOUNT, keychain],
-                                      capture_output=True, timeout=15)
-            if rollback.returncode:
-                raise RuntimeError("Unverified new Keychain item requires manual removal")
+        if attempted and not verified:
+            # Only remove an item whose content matches this invocation's token.
+            # The initial existence check above returned 'item not found' (44).
+            try:
+                candidate = subprocess.run(["/usr/bin/security", "find-generic-password",
+                                            "-s", SERVICE, "-a", ACCOUNT, "-w", keychain],
+                                           capture_output=True, text=True, timeout=15)
+            except (subprocess.SubprocessError, OSError):
+                raise RuntimeError("Unable to inspect unverified Keychain item; manual check required") from None
+            if candidate.returncode == 0:
+                if candidate.stdout.strip() != token:
+                    raise RuntimeError("Unexpected Keychain item after failed setup; manual inspection required")
+                try:
+                    rollback = subprocess.run(["/usr/bin/security", "delete-generic-password",
+                                               "-s", SERVICE, "-a", ACCOUNT, keychain],
+                                              capture_output=True, timeout=15)
+                except (subprocess.SubprocessError, OSError):
+                    raise RuntimeError("Unverified new Keychain item requires manual removal") from None
+                if rollback.returncode:
+                    raise RuntimeError("Unverified new Keychain item requires manual removal")
+            elif candidate.returncode != 44:
+                raise RuntimeError("Unable to inspect unverified Keychain item; manual check required")
     print("ADO token saved to login Keychain for " + user['login'] + ".")
     print("Account and public repository visibility checked. Repository selection and Contents/Issues/PR write permissions require UI confirmation and a controlled pilot.")
     print("dry-run and auto-merge settings were not changed.")

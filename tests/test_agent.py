@@ -90,6 +90,32 @@ process.stdin.on('end',()=>process.stdout.write('x'.repeat(2100000)));
             self.assert_process_stopped(int((data/'child-pid').read_text()))
 
     @unittest.skipUnless(platform.system() == "Darwin" and shutil.which("node"), "requires macOS and Node")
+    def test_cli_exit_with_descendant_holding_pipes_does_not_wait_for_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime, data = root / 'runtime', root / 'profile'
+            runtime.mkdir(); data.mkdir()
+            entry = runtime / 'cli.js'
+            entry.write_text("""
+const fs = require('fs');
+const cp = require('child_process');
+const child = cp.spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {stdio:'inherit'});
+fs.writeFileSync(process.env.MINIMAX_DATA_DIR+'/child-pid', String(child.pid));
+child.unref();
+process.stdin.resume();
+process.stdin.on('end', () => {
+  console.log(JSON.stringify({status:'succeeded',output:JSON.stringify({files:{'docs/a.md':'safe'}})}));
+});
+""")
+            cfg = {'node': shutil.which('node'), 'entry':str(entry), 'runtime_root':str(runtime),
+                   'data_dir':str(data), 'subscription_confirmed':True, 'timeout_seconds':8}
+            start = time.monotonic()
+            result = MiniMax(cfg).generate(issue(), {}, repo_config(), [])
+            self.assertEqual(result, {'docs/a.md':'safe'})
+            self.assertLess(time.monotonic()-start, 5)
+            self.assert_process_stopped(int((data/'child-pid').read_text()))
+
+    @unittest.skipUnless(platform.system() == "Darwin" and shutil.which("node"), "requires macOS and Node")
     def test_deadline_terminates_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

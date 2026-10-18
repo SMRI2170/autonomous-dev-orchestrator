@@ -92,10 +92,18 @@ class MiniMax:
                         selector.register(stream, selectors.EVENT_READ, label)
                     os.set_blocking(proc.stdin.fileno(), False)
                     selector.register(proc.stdin, selectors.EVENT_WRITE, "stdin")
+                    # Descendants can inherit the pipes and keep them open after
+                    # the CLI exits. Drain briefly, then kill the process group.
+                    exited_at = None
                     while selector.get_map():
-                        remaining = deadline - time.monotonic()
+                        now = time.monotonic()
+                        remaining = deadline - now
                         if remaining <= 0:
                             raise Blocked("MiniMax execution deadline exceeded")
+                        if proc.poll() is not None:
+                            exited_at = exited_at or now
+                            if now - exited_at >= 1.0:
+                                break
                         for key, _ in selector.select(timeout=min(0.25, remaining)):
                             stream, label = key.fileobj, key.data
                             if label == "stdin":

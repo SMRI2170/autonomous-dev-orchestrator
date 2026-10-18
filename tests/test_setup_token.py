@@ -98,12 +98,88 @@ class TokenSetupTests(unittest.TestCase):
             contextlib.redirect_stdout(io.StringIO()):
             setup_token.main([])
 
-    def test_failed_readback_rolls_back_new_item(self):
-        for failure in (subprocess.CompletedProcess([],1,stdout=''), subprocess.TimeoutExpired('security',15)):
-            responses=[subprocess.CompletedProcess([],44),subprocess.CompletedProcess([],0),failure,subprocess.CompletedProcess([],0)]
-            with self.subTest(failure=type(failure).__name__), patch('subprocess.run',side_effect=responses) as run, \
-                 patch('getpass.getpass',return_value=TOKEN), patch.object(setup_token,'request',side_effect=[
-                    {'login':'SMRI2170'},{'full_name':'SMRI2170/example','private':False,'permissions':{'push':True}}]), \
-                 contextlib.redirect_stdout(io.StringIO()), self.assertRaises((RuntimeError,subprocess.TimeoutExpired)):
+    def test_failed_readback_rolls_back_only_matching_token(self):
+        for failure in (subprocess.CompletedProcess([], 1, stdout=''),
+                        subprocess.TimeoutExpired('security', 15)):
+            responses = [subprocess.CompletedProcess([], 44),
+                         subprocess.CompletedProcess([], 0), failure,
+                         subprocess.CompletedProcess([], 0, stdout=TOKEN+'\\n'),
+                         subprocess.CompletedProcess([], 0)]
+            with self.subTest(failure=type(failure).__name__), \
+                 patch('subprocess.run', side_effect=responses) as run, \
+                 patch('getpass.getpass', return_value=TOKEN), \
+                 patch.object(setup_token, 'request', side_effect=[
+                     {'login': 'SMRI2170'},
+                     {'full_name': 'SMRI2170/example', 'private': False}]), \
+                 contextlib.redirect_stdout(io.StringIO()), \
+                 self.assertRaises((RuntimeError, subprocess.TimeoutExpired)):
                 setup_token.main([])
-            self.assertIn('delete-generic-password',run.call_args.args[0])
+            self.assertIn('delete-generic-password', run.call_args.args[0])
+
+    def test_add_timeout_reconciles_and_removes_matching_item(self):
+        responses = [subprocess.CompletedProcess([], 44),
+                     subprocess.TimeoutExpired('security', 30),
+                     subprocess.CompletedProcess([], 0, stdout=TOKEN+'\\n'),
+                     subprocess.CompletedProcess([], 0)]
+        with patch('subprocess.run', side_effect=responses) as run, \
+             patch('getpass.getpass', return_value=TOKEN), \
+             patch.object(setup_token, 'request', side_effect=[
+                 {'login': 'SMRI2170'},
+                 {'full_name': 'SMRI2170/example', 'private': False}]), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             self.assertRaisesRegex(RuntimeError, 'add timed out'):
+            setup_token.main([])
+        self.assertIn('delete-generic-password', run.call_args.args[0])
+        self.assertEqual(run.call_count, 4)
+
+    def test_add_failure_without_item_does_not_delete(self):
+        responses = [subprocess.CompletedProcess([], 44),
+                     subprocess.CompletedProcess([], 1),
+                     subprocess.CompletedProcess([], 44)]
+        with patch('subprocess.run', side_effect=responses) as run, \
+             patch('getpass.getpass', return_value=TOKEN), \
+             patch.object(setup_token, 'request', side_effect=[
+                 {'login': 'SMRI2170'},
+                 {'full_name': 'SMRI2170/example', 'private': False}]), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             self.assertRaisesRegex(RuntimeError, 'did not confirm creation'):
+            setup_token.main([])
+        self.assertEqual(run.call_count, 3)
+
+    def test_add_timeout_never_deletes_another_item(self):
+        responses = [subprocess.CompletedProcess([], 44),
+                     subprocess.TimeoutExpired('security', 30),
+                     subprocess.CompletedProcess([], 0, stdout='different-token\\n')]
+        with patch('subprocess.run', side_effect=responses) as run, \
+             patch('getpass.getpass', return_value=TOKEN), \
+             patch.object(setup_token, 'request', side_effect=[
+                 {'login': 'SMRI2170'},
+                 {'full_name': 'SMRI2170/example', 'private': False}]), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             self.assertRaisesRegex(RuntimeError, 'Unexpected Keychain item'):
+            setup_token.main([])
+        self.assertEqual(run.call_count, 3)
+
+    def test_non_ascii_keychain_path_preserved_in_interactive_command(self):
+        import shlex
+        keychain = '/Users/日本語/Library/Keychains/login "test"\\\\.keychain-db'
+        calls = []
+        def security(args, **kwargs):
+            calls.append((args, kwargs))
+            if '-i' in args:
+                parsed = shlex.split(kwargs['input'].strip())
+                self.assertEqual(parsed[-1], keychain)
+                self.assertNotIn('\\\\u65e5', kwargs['input'])
+                return subprocess.CompletedProcess(args, 0)
+            if '-w' in args:
+                return subprocess.CompletedProcess(args, 0, stdout=TOKEN+'\\n')
+            return subprocess.CompletedProcess(args, 44)
+        with patch.object(setup_token, 'login_keychain', return_value=keychain), \
+             patch('subprocess.run', side_effect=security), \
+             patch('getpass.getpass', return_value=TOKEN), \
+             patch.object(setup_token, 'request', side_effect=[
+                 {'login': 'SMRI2170'},
+                 {'full_name': 'SMRI2170/example', 'private': False}]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            setup_token.main([])
+        self.assertTrue(any('-i' in args for args, _ in calls))
