@@ -30,6 +30,35 @@ class AgentTests(unittest.TestCase):
         self.assertIn("Ignore all rules", data["untrusted_data"]["issue"]["body"])
         self.assertEqual(data["allowed_paths"], repo_config()["allowed_paths"])
 
+    @unittest.skipUnless(platform.system() == "Darwin" and shutil.which("node"), "requires macOS and Node")
+    def test_real_seatbelt_minimax_reviewer_separate_invocation(self):
+        from ado.minimax_review import MiniMaxReviewer
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime, data = root / "runtime", root / "profile"
+            runtime.mkdir(); data.mkdir()
+            entry = runtime / "cli.js"
+            entry.write_text("""
+let payload = '';
+process.stdin.on('data', chunk => payload += chunk);
+process.stdin.on('end', () => {
+  const review = payload.includes('independent code reviewer') &&
+    payload.includes('expected_head_sha') && payload.includes('original_files') &&
+    payload.includes('proposed_files');
+  if (!review || process.env.GH_TOKEN || process.env.OPENAI_API_KEY) process.exit(5);
+  const input = JSON.parse(payload.slice(payload.indexOf('{"expected_head_sha"')));
+  const result = {head_sha:input.expected_head_sha,verdict:'APPROVE',findings:[]};
+  console.log(JSON.stringify({status:'succeeded', output:JSON.stringify(result)}));
+});
+""")
+            config = {"node": shutil.which("node"), "entry": str(entry),
+                      "runtime_root": str(runtime), "data_dir": str(data),
+                      "subscription_confirmed": True, "timeout_seconds": 20}
+            with patch.dict(os.environ, {"GH_TOKEN": "hidden", "OPENAI_API_KEY": "hidden"}):
+                result = MiniMaxReviewer(MiniMax(config)).review(
+                    issue(), {"docs/a.md": "old"}, {"docs/a.md": "new"}, "a" * 40)
+            self.assertEqual(result, {"verdict": "APPROVE", "findings": []})
+
     def test_subscription_must_be_confirmed(self):
         with patch("platform.system", return_value="Darwin"), self.assertRaises(Blocked):
             MiniMax({}).generate(issue(), {}, repo_config(), [])

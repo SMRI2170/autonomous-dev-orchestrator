@@ -28,14 +28,25 @@ def review_prompt(issue, originals, changes, sha):
     }, ensure_ascii=False)
 
 
+def _unique_keys(pairs):
+    output = {}
+    for key, value in pairs:
+        if key in output:
+            raise ValueError("Duplicate JSON review key")
+        output[key] = value
+    return output
+
+
 def parse_review(raw, sha, paths):
     if not isinstance(raw, str) or len(raw.encode("utf-8")) > 50000:
         raise Blocked("MiniMax reviewer response invalid or too large")
     try:
-        value = json.loads(raw)
+        value = json.loads(raw, object_pairs_hook=_unique_keys)
     except (ValueError, TypeError):
         raise Blocked("MiniMax reviewer did not return JSON") from None
-    if not isinstance(value, dict) or set(value) != {"head_sha", "verdict", "findings"} or value["head_sha"] != sha:
+    if not isinstance(value, dict) or set(value) != {"head_sha", "verdict", "findings"} or \
+            value["head_sha"] != sha or not isinstance(sha, str) or len(sha) != 40 or \
+            any(c not in "0123456789abcdef" for c in sha):
         raise Blocked("MiniMax reviewer identity/schema mismatch")
     if value["verdict"] not in ("APPROVE", "REQUEST_CHANGES"):
         raise Blocked("MiniMax reviewer verdict unsupported")
