@@ -218,6 +218,38 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.tick(), "PUBLISHING")
         self.assertEqual(self.gh.merge_calls, 0)
 
+    def test_base_movement_conflicted_pr_must_not_handoff(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable = False
+        self.gh.mergeable_state = "dirty"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_dirty_state_with_true_mergeable_must_not_handoff(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable = True
+        self.gh.mergeable_state = "dirty"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_unknown_mergeability_must_not_handoff(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable = None
+        self.gh.mergeable_state = "unknown"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_behind_without_approved_review_still_waits(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable_state = "behind"
+        self.gh.review = "MISSING"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.gh.merge_calls, 0)
+
     def test_nonclean_without_base_movement_does_not_handoff(self):
         self.publish()
         self.gh.mergeable_state = "dirty"
