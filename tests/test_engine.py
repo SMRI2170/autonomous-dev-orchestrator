@@ -29,6 +29,82 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.tick(), "PUBLISHING")
         self.assertEqual(self.tick(), "REVIEW")
 
+
+    def setup_minimax_review(self, verdict="APPROVE", findings=None):
+        from unittest.mock import Mock
+        self.cfg["repositories"][0]["review_provider"] = "minimax"
+        self.engine.reviewer = Mock()
+        self.engine.reviewer.review.return_value = {
+            "verdict": verdict, "findings": findings if findings is not None else []}
+        return self.engine.reviewer
+
+    def test_minimax_review_approval_is_bound_to_current_sha(self):
+        reviewer = self.setup_minimax_review()
+        self.publish()
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(reviewer.review.call_count, 1)
+        record = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(record["minimax_review"]["sha"], self.gh.head)
+        self.assertEqual(record["minimax_review"]["verdict"], "APPROVE")
+        self.assertEqual(self.tick(), "AWAITING_HUMAN")
+        self.assertEqual(reviewer.review.call_count, 1)
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_minimax_review_findings_feed_normal_repair_loop(self):
+        reviewer = self.setup_minimax_review(
+            "REQUEST_CHANGES", [{"path": "docs/glossary.md", "severity": "major",
+                                 "message": "Glossary definition is wrong"}])
+        self.publish()
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.agent.calls, 2)
+        self.assertIn("Glossary definition is wrong", self.agent.inputs[1][0]["body"])
+        self.assertEqual(reviewer.review.call_count, 1)
+
+    def test_minimax_does_not_review_before_ci_passes(self):
+        reviewer = self.setup_minimax_review()
+        self.publish()
+        original = self.gh.evidence
+        def pending(repo, pr):
+            evidence = original(repo, pr)
+            evidence["checks"][0]["status"] = "in_progress"
+            return evidence
+        self.gh.evidence = pending
+        self.assertEqual(self.tick(), "REVIEW")
+        reviewer.review.assert_not_called()
+
+    def test_minimax_review_interruption_is_not_replayed(self):
+        reviewer = self.setup_minimax_review()
+        reviewer.review.side_effect = RuntimeError("interrupted")
+        self.publish()
+        self.assertEqual(self.tick(), "BLOCKED")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(data["resume"], "REVIEWING")
+        with self.assertRaises(Blocked):
+            self.store.retry(1)
+        self.assertEqual(reviewer.review.call_count, 1)
+
+    def test_minimax_never_automerges_even_if_enabled(self):
+        self.setup_minimax_review()
+        self.cfg["auto_merge"] = True
+        self.cfg["repositories"][0]["auto_merge"] = True
+        self.publish()
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "BLOCKED")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_missing_minimax_reviewer_fails_closed(self):
+        self.cfg["repositories"][0]["review_provider"] = "minimax"
+        self.publish()
+        self.assertEqual(self.tick(), "BLOCKED")
+        self.assertEqual(self.agent.calls, 1)
+
+    def test_dry_run_never_calls_minimax_reviewer(self):
+        reviewer = self.setup_minimax_review()
+        self.cfg["dry_run"] = True
+        self.assertTrue(self.engine.tick()["dry_run"])
+        reviewer.review.assert_not_called()
+
     def test_dry_run_has_no_agent_or_remote_write_or_live_claim(self):
         self.cfg["dry_run"] = True
         result = self.engine.tick()

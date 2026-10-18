@@ -37,7 +37,8 @@ Actions Write、Workflows Write、Projects Write、organization全体の権限�
 1. opt-inラベル`ado:ready`を作成する。自動マージを将来検討する場合だけ`ado:low-risk`も用意する。
 2. `trusted_authors`をIssue作成者の明示的な許可リストにする。公開の第三者Issueは実行しない。
 3. 既存CIを利用し、PRで必ず走る標準ホストRunnerのcheck名を確認する。Python用・Flutter用の再利用workflowとcaller例をexamplesに用意している。Flutterは対象に合うSDKの正確なバージョンを入力する。`required_checks`に**APIが返す正確なname**と`app = "github-actions"`を設定する。再利用workflowでは表示名が`checks / unit`等になる場合があるため、`unit`と決め打ちしない。
-4. CodeRabbitを[公開リポジトリ向け無料プラン](https://www.coderabbit.ai/pricing)で接続する。従量課金の追加レビューはOffにし、課金機能は有効化しない。bot loginは実アカウントのAPI結果と照合する。正式なAPPROVEDを返すため、`examples/coderabbit.yaml`の`reviews.request_changes_workflow = true`相当の設定を対象repoに手動導入する。作者自身の承認コマンドは`allow_author_approval: false`で無効にする。既定のCOMMENTEDだけではworkerは合格にしない。
+4. 標準の`review_provider = "coderabbit"`ならCodeRabbitを[公開リポジトリ向け無料プラン](https://www.coderabbit.ai/pricing)で接続する。従量課金の追加レビューはOffにし、課金機能は有効化しない。bot loginは実アカウントのAPI結果と照合する。正式なAPPROVEDを返すため、`examples/coderabbit.yaml`の`reviews.request_changes_workflow = true`相当の設定を対象repoに手動導入する。作者自身の承認コマンドは`allow_author_approval: false`で無効にする。既定のCOMMENTEDだけではworkerは合格にしない。
+   既存契約のMiniMaxをレビュー主体にする場合は、対象リポジトリに`review_provider = "minimax"`を設定する。CI成功・PRのhead一致・変更ファイルのSHA検証後だけ、ツールなしの新規MiniMax CLI実行でレビューし、判定と差分ダイジェストをSQLiteに保存する。実装とレビューは別呼び出しだが同じ基盤モデルであり、独立モデルによる承認とは異なる。CodeRabbitは任意。MiniMax方式では自動マージを実施しない。レビュー呼び出し中に終了したジョブは自動再実行不可。既存の進行中ジョブに対してレビュー方式を変更すると、policy hash検査によりBlockedとなるので、新しいIssueから移行すること。
 5. `examples/issue.md`を参考に、`## Acceptance criteria`を含む小さなIssueを作る。依存がなければ`Depends-On`行を削除。依存Issueは同一リポジトリ内で`completed`として閉じられている必要がある。
 6. `ado run --once`で読み取りだけの計画を確認する。
 

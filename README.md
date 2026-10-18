@@ -14,7 +14,7 @@ flowchart TD
   D --> E[MiniMax Code: toolsなしで変更JSONを提案]
   E --> F[パス・内容・機密・変更量検査]
   F --> G[専用ブランチ・PR作成]
-  G --> H[同一head SHAのCI・CodeRabbit判定]
+  G --> H[同一head SHAのCI・選択したレビュアー判定]
   H -->|要修正: 最大3回| E
   H -->|合格| I{マージ許可と安全条件}
   I -->|既定| J[人間のマージ待ち]
@@ -54,7 +54,8 @@ cp examples/config.toml config.toml
 | 分離 | toolsなし、環境変数を限定、macOS Seatbelt、対象cloneなし。危険コマンド実行経路なし |
 | ブランチ・PR・CI・レビュー取得 | GitHub REST/GraphQL実装。全ページを上限付きで取得、欠落時は不合格 |
 | 修正上限・冪等性・再起動 | 初回+最大3回。予算を呼び出し前に保存。publish意図・commitを永続化 |
-| 自動マージ | 既定OFF。docs内Markdownのみ。SHA一致、CI/CodeRabbit承認、未解決指摘ゼロ、保護ブランチ必須 |
+| MiniMaxレビュー | 選択制（`review_provider = "minimax"`）。独立したツールなしCLI呼び出し、構造化判定、最新SHA・差分ダイジェストに紐づくSQLite記録。CodeRabbitは任意。実サービス受入は未実施 |
+| 自動マージ | 既定OFF。MiniMax自己レビューによる自動マージは禁止。従来のCodeRabbit方式は条件付きで残す |
 | Issue完了・次Issue | 実際のマージ済み状態を確認後に完了。Blockedは自動再試行しない |
 | 可視化 | `ado status`、JSONL、PR。GitHub Projectsは手動/組込みauto-addの利用を提案 |
 | GitHub Projects書込み、n8n、Codex自動呼出し | **未実装**。比較と拡張案は[設計判断](docs/architecture.md) |
@@ -65,7 +66,7 @@ cp examples/config.toml config.toml
 
 MiniMaxは既存契約でログインした専用プロファイルを使います。OpenAI/MiniMaxの従量課金APIキーは受け付けず、枠超過・ログイン失敗はBlockedです。ただし、CLI側で選択したプロバイダーや契約内容は運用者による確認が必要で、本ツールがアカウントの請求額を保証する仕組みはありません。新規有料サービスへの登録や自動アップグレードはしません。
 
-CI対象は公開リポジトリのみ、標準`ubuntu-latest`のみをサンプルで使用します。private repoと有料Runnerは対象外。CodeRabbitは公開向け無料枠を運用者が接続します。無料枠で現在SHAへの`APPROVED`が提供されない場合も基準を下げず、人間の対応待ちから期限切れBlockedになります。
+CI対象は公開リポジトリのみ、標準`ubuntu-latest`のみをサンプルで使用します。private repoと有料Runnerは対象外。標準はCodeRabbit承認方式です。`review_provider = "minimax"`にすると、MiniMax Codeの既存契約にログインした専用プロファイルを使って別のツールなし呼び出しでレビューします。追加の従量課金APIへの切替はありませんが、契約の利用上限を超える可能性はあります。レビュー中の中断は再実行せずBlockedとし、自動マージは不可です。
 
 ## ライセンス
 
