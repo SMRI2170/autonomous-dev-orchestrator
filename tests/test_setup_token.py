@@ -79,7 +79,7 @@ class TokenSetupTests(unittest.TestCase):
         with patch('subprocess.run', side_effect=[
                 subprocess.CompletedProcess([],44),
                 subprocess.CompletedProcess([],0),
-                subprocess.CompletedProcess([],0,stdout=TOKEN+'\\n'),
+                subprocess.CompletedProcess([],0,stdout=TOKEN+'\n'),
             ]), patch('getpass.getpass',return_value=TOKEN), \
             patch.object(setup_token,'request',side_effect=[
                 {'login':'SMRI2170'}, {'full_name':'SMRI2170/example','private':False,
