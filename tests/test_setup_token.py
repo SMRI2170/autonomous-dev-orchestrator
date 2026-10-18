@@ -1,7 +1,10 @@
 import contextlib
 import io
 import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 from scripts import setup_token
 
@@ -17,6 +20,14 @@ class TokenSetupTests(unittest.TestCase):
         self.patch_platform.start(); self.addCleanup(self.patch_platform.stop)
         self.patch_keychain = patch.object(setup_token, "login_keychain", return_value="/Users/test/Library/Keychains/login.keychain-db")
         self.patch_keychain.start(); self.addCleanup(self.patch_keychain.stop)
+
+    def test_cli_help_works_when_invoked_outside_repo(self):
+        script = Path(setup_token.__file__).resolve()
+        with tempfile.TemporaryDirectory() as cwd:
+            result = subprocess.run([sys.executable, str(script), "--help"],
+                                    cwd=cwd, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--config", result.stdout)
 
     def test_existing_token_is_never_overwritten(self):
         with patch('subprocess.run', return_value=subprocess.CompletedProcess([], 0)), \

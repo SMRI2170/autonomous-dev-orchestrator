@@ -10,9 +10,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from ado.keychain import login_keychain
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from ado.keychain import login_keychain
 from ado.config import load
 
 SERVICE = "ado.github-token"
