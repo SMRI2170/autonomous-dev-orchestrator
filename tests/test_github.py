@@ -71,3 +71,8 @@ class GitHubTests(unittest.TestCase):
             protection["required_status_checks"]["checks"][0]["app_id"] = None
             with self.assertRaises(Blocked):
                 gh.assert_protection("owner/project", "main", repo_config(), ev)
+
+    def test_total_count_mismatch_fails_closed(self):
+        gh = GitHub()
+        with patch.object(gh, "api", return_value={"total_count": 101, "check_runs": [{}]}), self.assertRaises(Blocked):
+            gh.pages("repos/owner/project/commits/head/check-runs", "check_runs")

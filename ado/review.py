@@ -19,9 +19,11 @@ def judge(pr, evidence, config):
             feedback.append({"kind": "ci", "name": required["name"],
                              "conclusion": check.get("conclusion"),
                              "summary": redact((check.get("output") or {}).get("summary") or "")[:8000]})
-    latest = {}
+    latest, verdicts = {}, {}
     for review in sorted(evidence["reviews"], key=lambda r: r["id"]):
         latest[review["user"]["login"]] = review
+        if review.get("state") in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+            verdicts[review["user"]["login"]] = review
     bot = latest.get(config["coderabbit_login"])
     if not bot or bot.get("commit_id") != sha or bot.get("user", {}).get("type") != "Bot":
         waiting.append("missing CodeRabbit review at current SHA")
@@ -29,7 +31,7 @@ def judge(pr, evidence, config):
         feedback.append({"kind": "review", "body": redact(bot.get("body") or "")[:8000]})
     elif bot["state"] != "APPROVED":
         waiting.append("CodeRabbit has not APPROVED current SHA")
-    for review in latest.values():
+    for review in verdicts.values():
         if review.get("state") == "CHANGES_REQUESTED":
             # Outstanding changes-requested remains a veto even from an earlier commit.
             if review.get("commit_id") != sha:
