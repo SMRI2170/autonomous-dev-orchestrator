@@ -71,7 +71,30 @@ stdinで指示と許可済みファイルのスナップショットを渡しま
 
 この契約を利用バージョンで小さなタスクにより確認し、`subscription_confirmed = true`にします。認証更新のためのネットワークと専用data dirの読み書きは許可されます。起動に不足するOSアクセスがあると失敗しBlockedになります。HOME全体の許可やsandbox無効化で回避しないでください。
 
-## 5. ライブ実行（自動マージは無効のまま）
+## 5. MiniMaxレビューの単発受入テスト（GitHub書込みなし）
+
+Macで最新版をpullし、`python -m unittest discover -s tests -v`がすべて通ってから実行してください。これにより既存MiniMax契約で本物のレビューCLI応答を一度検証します（モデルの利用枠を消費します）。本番用のIssue・PR・GitHub APIは呼びません。
+
+```sh
+.venv/bin/python - <<'PY'
+from ado.config import load
+from ado.agent import MiniMax
+from ado.minimax_review import MiniMaxReviewer
+
+cfg = load("config.toml")
+result = MiniMaxReviewer(MiniMax(cfg["minimax"])).review(
+    {"title": "Explain PR", "body": "## Acceptance criteria\\nExplain what PR means."},
+    {"docs/example.md": "PR means private repository."},
+    {"docs/example.md": "PR means pull request."},
+    "a" * 40,
+)
+print("MiniMax reviewer:", result["verdict"], "findings:", len(result["findings"]))
+PY
+```
+
+`APPROVE`または`REQUEST_CHANGES`のどちらも正常な構造化応答です。CLI起動・ログイン・モデル契約のエラーは安全停止します。トークン・プロファイル内容は共有しないでください。現在の`config.toml`に`review_provider`が未指定なら、旧CodeRabbit方式が維持されます。レビュー方式変更時は進行中ジョブの扱いを確認し、先に手動で整理してください。
+
+## 6. ライブ実行（自動マージは無効のまま）
 
 `dry_run = false`のみ変更します。`auto_merge = false`は維持します。1つの小さなdocs Issueで開始してください。
 

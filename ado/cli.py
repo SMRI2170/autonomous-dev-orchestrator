@@ -30,7 +30,10 @@ def main():
         if args.command == "status":
             print(json.dumps([{"job": r["id"], "repo": r["repo"], "issue": r["issue"], "state": r["state"],
                                "repairs": json.loads(r["data"]).get("repairs", 0),
-                               "reason": json.loads(r["data"]).get("reason")}
+                               "reason": json.loads(r["data"]).get("reason"),
+                               "review_verdict": (json.loads(r["data"]).get("minimax_review") or {}).get("verdict"),
+                               "review_sha": (json.loads(r["data"]).get("minimax_review") or {}).get("sha"),
+                               "review_findings": len((json.loads(r["data"]).get("minimax_review") or {}).get("findings", []))}
                               for r in store.rows()], ensure_ascii=False, indent=2))
         elif args.command == "retry":
             with store.lock():
