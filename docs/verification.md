@@ -64,3 +64,7 @@ Mac mini M2 / 16GBのDeveloper/autonomous-dev-orchestratorに配置。Homebrew P
 認証情報はリポジトリ・TOML・plist・監査イベントに保存せず、MiniMax用専用profileとmacOS login Keychainにのみ保管しています。
 
 CodeRabbit Appのこの新規repoへの接続もユーザーが完了し、PR #6のレビュー開始を確認しました。既存PR #5には固定の`@coderabbitai review`を一度だけ投稿してレビューを依頼しました。正式承認用のrequest_changes_workflowをrepo設定と配布用サンプルに追加しています。作者が承認コマンドで自身のPRを通す機能は無効です。
+
+追加レビューの指摘を反映し、トークン保存を固定repoからローカル設定の全対象へ一般化しました。readback失敗/タイムアウト時の新規Keychain項目のロールバックをテストしています。Issues/PR書込み権限は読み取りだけで確認済みと扱わず、UI確認とpilot実測が必要なことを明記しました。また、人間への引継ぎではbaseの更新だけで停止せず、base不変条件を自動マージ時に必須とする動作を2テストで確認しています。
+
+最終ローカル検証は61テスト成功。配布用examples/config.tomlが.gitignoreで除外される不具合も修正し、安全な初期値で読み込めるテストを追加しました。

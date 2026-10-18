@@ -8,6 +8,8 @@ from .policy import Blocked
 def load(path):
     with open(path, "rb") as file:
         config = tomllib.load(file)
+    if "github_login" in config and (not isinstance(config["github_login"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", config["github_login"])):
+        raise Blocked("Invalid github_login")
     config.setdefault("dry_run", True)
     config.setdefault("auto_merge", False)
     config.setdefault("state_dir", "~/.local/state/ado")

@@ -63,7 +63,16 @@ class PolicyTests(unittest.TestCase):
             path.write_text('repositories = []\n')
             self.assertTrue(load(path)["dry_run"])
             self.assertFalse(load(path)["auto_merge"])
-            for value in ['max_repairs = 4', 'dry_run = "false"', 'poll_seconds = 0']:
+            for value in ['max_repairs = 4', 'dry_run = "false"', 'poll_seconds = 0', 'github_login = 123']:
                 path.write_text(value)
                 with self.assertRaises(Blocked):
                     load(path)
+
+    def test_distributed_example_config_loads_with_safe_defaults(self):
+        from pathlib import Path
+        path=Path(__file__).resolve().parents[1]/'examples/config.toml'
+        cfg=load(path)
+        self.assertTrue(cfg['dry_run'])
+        self.assertFalse(cfg['auto_merge'])
+        self.assertTrue(cfg['repositories'])
+        self.assertFalse(cfg['minimax']['subscription_confirmed'])
