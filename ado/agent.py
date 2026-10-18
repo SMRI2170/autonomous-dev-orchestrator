@@ -5,6 +5,7 @@ import platform
 import signal
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from .policy import Blocked, parse_changes
 
@@ -30,13 +31,13 @@ def profile(node, runtime_root, data_dir, temp):
     # JSON quoting is also valid Seatbelt string quoting; reject control chars upstream.
     q = lambda p: json.dumps(str(p))
     read = ["/System", "/usr", "/bin", "/Library", "/dev", "/private/etc", "/opt/homebrew", "/usr/local",
-            str(Path(node).parent), runtime_root, data_dir, temp]
+            str(Path(node).parent), runtime_root, data_dir, data_dir + ".lock", temp]
     return "\n".join([
         "(version 1)", "(deny default)", '(allow file-read* (literal "/"))',
         "(allow network-outbound)", "(allow file-read-metadata)", "(allow sysctl-read mach-lookup process-info*)",
         "(allow process-fork)", f"(allow process-exec (literal {q(node)}))",
         "(allow file-read* " + " ".join(f"(subpath {q(p)})" for p in read) + ")",
-        "(allow file-write* " + " ".join(f"(subpath {q(p)})" for p in [data_dir, temp]) + ")",
+        "(allow file-write* " + " ".join(f"(subpath {q(p)})" for p in [data_dir, data_dir + ".lock", temp]) + ")",
         '(allow file-write* (literal "/dev/null"))',
     ])
 
@@ -71,17 +72,31 @@ class MiniMax:
                    "MINIMAX_DATA_DIR": str(paths["data_dir"]), "MAVIS_DATA_DIR": str(paths["data_dir"]),
                    "NO_COLOR": "1", "TERM": "dumb"}
             cmd = ["/usr/bin/sandbox-exec", "-f", str(sb), str(paths["node"]), str(paths["entry"]),
-                   "exec", "--mode", "lightweight", "--input", "-", "--output-format", "json"]
-            # File-backed output avoids unbounded memory growth. rlimit caps per-file output.
+                   "exec", "--mode", "lightweight", "--max-steps", "1", "--input", "-", "--output-format", "json"]
+            # File-backed output is polled and bounded separately from the CLI runtime database.
             with open(Path(temp) / "stdout", "w+") as out, open(Path(temp) / "stderr", "w+") as err:
                 import resource
                 def limits():
-                    resource.setrlimit(resource.RLIMIT_FSIZE, (2_000_000, 2_000_000))
+                    resource.setrlimit(resource.RLIMIT_FSIZE, (64_000_000, 64_000_000))
                 proc = subprocess.Popen(cmd, cwd=temp, env=env, stdin=subprocess.PIPE,
                                         stdout=out, stderr=err, text=True, start_new_session=True,
                                         preexec_fn=limits)
                 try:
-                    proc.communicate(prompt(issue, files, repo_config, feedback), timeout=cfg.get("timeout_seconds", 600))
+                    deadline = time.monotonic() + cfg.get("timeout_seconds", 600)
+                    first_input = prompt(issue, files, repo_config, feedback)
+                    while True:
+                        if os.fstat(out.fileno()).st_size + os.fstat(err.fileno()).st_size > 2_000_000:
+                            raise Blocked("MiniMax output budget exceeded")
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise Blocked("MiniMax execution deadline exceeded")
+                        try:
+                            proc.communicate(first_input, timeout=min(0.25, remaining))
+                            break
+                        except subprocess.TimeoutExpired:
+                            first_input = None
+                    if os.fstat(out.fileno()).st_size + os.fstat(err.fileno()).st_size > 2_000_000:
+                        raise Blocked("MiniMax output budget exceeded")
                 finally:
                     # Also terminate any surviving runtime children after a normal exit.
                     try:

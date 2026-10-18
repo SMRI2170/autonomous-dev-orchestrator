@@ -34,3 +34,31 @@ MiniMax CLIがこのMacに未導入のため、実契約のモデル呼出し・
 この初期セットアップ検証のみ、ユーザーが許可した新規repo作成に使った既存gh認証をプロセス内で利用しました。トークンは保存・表示していません。常駐運用には対象限定fine-grained PATを別途用意してください。
 
 ローカルvenvへのeditable install成功、launchd plist生成と`plutil -lint`成功。LaunchAgentのOS登録・起動はしていません。Flutter再利用workflowは用意しましたが、対象Flutterプロジェクトには導入せず、実際のFlutter SDKダウンロード/テストも未実施です。
+
+## Developer配下への実環境セットアップ（2026-10-18追記）
+
+Mac mini M2 / 16GBのDeveloper/autonomous-dev-orchestratorに配置。Homebrew Python 3.12.13でvenvを作成しeditable installを実施。PR #3をCI成功確認後に明示的にsquash mergeし、mainに取り込みました（GitHubのauto-merge機能は有効化していません）。
+
+既存CLI 0.6.3はlightweight非対応のため変更せず、専用の非公開ローカル.state/minimax-runtimeにnpm版0.6.12を導入。ユーザーが専用OAuth認証を完了し、`provider use token-plan`を明示。APIキー設定は既存profileからコピーしていません。
+
+実CLIで初期化時に判明した2点を修正しました。
+
+- proper-lockfileがprofileの隣に作る正確な`.lock`ディレクトリだけを許可。領域外ファイルとshellの拒否は維持。
+- OSのファイルサイズ2MB上限が内部SQLite作成を止めていたため、出力を独立して2MBに監視し、OSファイル上限は64MBに変更。期限/出力超過時は子プロセスごと停止。
+
+変更後、実MiniMaxから`docs/pilot-glossary.md`の日本語用語集（325 UTF-8 bytes）を生成し、strict JSONとパス/内容検査を通過しました。これはfixtureではありません。実アカウントの連続修正・CodeRabbit承認・マージは未検証です。
+
+ローカル56テスト成功（Mac固有3件を含む）。ログインユーザーのLaunchAgentをdry-runで起動し、GitHub読み取りのみ・agent_called=false・github_writes=falseを確認。登録対象はこの新規オーケストレーターrepoのみで、既存関連repoは未登録です。
+
+### 実MiniMax → 実PR → 実CIの縦断検証
+
+[Issue #4](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/4)を新規repo内に作成し、production Engine/Store/GitHub/MiniMaxをそのまま使用しました。専用OAuth Token Planと、Keychainに保存した対象限定fine-grained PATで実行しています。
+
+- model_calls=1、repairs=0。fixture/キャッシュした提案の再生は使っていません。
+- MiniMaxが402 bytesの`docs/pilot-glossary.md`を生成し、検査後に[PR #5](https://github.com/SMRI2170/autonomous-dev-orchestrator/pull/5)を作成。
+- head SHAは`60296e1d3f5235bab20787ac5ff93cadcb23d3ba`。
+- 同じSHAの[標準Runner CI](https://github.com/SMRI2170/autonomous-dev-orchestrator/actions/runs/39088062928)が成功。
+- PATでChecks APIとGraphQL reviewThreadsの取得を確認。GitHub UIでChecks権限が出ない場合も、この公開repoの結果は取得できました。
+- CodeRabbit承認がまだない段階はREVIEWを維持し、merge/Issue closeは行っていません。
+
+認証情報はリポジトリ・TOML・plist・監査イベントに保存せず、MiniMax用専用profileとmacOS login Keychainにのみ保管しています。

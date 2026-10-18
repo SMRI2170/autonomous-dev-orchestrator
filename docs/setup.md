@@ -25,12 +25,12 @@ Mac標準のPython 3.9では動きません。プロジェクトで管理したP
 | Contents | Read/Write | git objects、専用ブランチ、マージ |
 | Issues | Read/Write | Issue取得・完了 |
 | Pull requests | Read/Write | PR作成、レビューとスレッドの読取り、マージ |
-| Checks | Read | check-runsの取得 |
+| Checks | Read、選択できる場合 | check-runsの取得。公開リソースの読取りはこの権限なしでも利用できるため、UIに項目がなければ取得を実測して確認 |
 | Administration | Read、任意 | 自動マージ時の保護ブランチ読取りのみ |
 
 Actions Write、Workflows Write、Projects Write、organization全体の権限、管理書込みは不要です。ルールのバイパス権限を付けないでください。Branch protectionを設定する操作はこのツールに実装していません。Contents WriteはGitHub側では専用ブランチだけに限定できないため、default branchを保護してください。
 
-一時的な手動実行ではシェルの非表示入力等でGH_TOKENを渡し、終了後に解除します。トークンを設定TOML、コマンドの履歴、plist、リポジトリに書かないでください。常駐用は[Keychainの手順](launchd.md)を利用します。
+一時的な手動実行ではシェルの非表示入力等でGH_TOKENを渡し、終了後に解除します。トークンを設定TOML、コマンドの履歴、plist、リポジトリに書かないでください。常駐用は[Keychainの手順](launchd.md)を利用します。macOSでは`python scripts/setup_token.py`で非表示入力し、アカウントと対象repoへの書込みアクセスを確認してKeychainへ保存できます。既存のADO項目は上書きしません。トークンを引数に渡さず、Keychain操作のstdinで受け渡します。
 
 ## 3. 対象リポジトリの準備（手動）
 
@@ -54,13 +54,15 @@ MINIMAX_DATA_DIR=/absolute/path/to/ado-minimax-profile mcode
 
 Globalでないアカウントは公式の該当地域用ログインを使います。対話UIの`/status`と`/provider`で、既存契約を使う公式アカウントであり、従量課金のcustom providerやAPIキーを使っていないことを確認します。利用枠超過時の挙動も契約側で確認してください。本ツールは請求情報APIを使いません。
 
-設定するパスは`node`実行体、CLIの`dist/cli.js`、依存パッケージを含む`runtime_root`、専用`data_dir`です。シェルの`mcode`ランチャーは直接起動しません。ランチャー経由の任意コマンドや別CLIへのフォールバックは拒否します。
+設定するパスは`node`実行体、CLIの`cli.js`（npm版はpackage直下、source buildでは`dist/cli.js`）、依存パッケージを含む`runtime_root`、専用`data_dir`です。シェルの`mcode`ランチャーは直接起動しません。ランチャー経由の任意コマンドや別CLIへのフォールバックは拒否します。
 
 アダプターのコマンド契約:
 
 ```text
 node /reviewed/runtime/dist/cli.js exec --mode lightweight --input - --output-format json
 ```
+
+npm配布版0.6.12ではentryは`node_modules/@minimax-ai/code/cli.js`です。CLIはバージョンを固定し、既存インストールとは別の専用ディレクトリに置いてください。`mcode provider use token-plan`で既存契約の認証元を明示します。
 
 stdinで指示と許可済みファイルのスナップショットを渡します。標準出力は`{"status":"succeeded","output":"…"}`、outputはさらに`{"files":{"docs/example.md":"全文"}}`というJSON文字列である必要があります。Markdownフェンス、追加キー、重複キー、空変更は不合格。ファイル削除、rename、バイナリ、実行権限変更は未対応です。
 

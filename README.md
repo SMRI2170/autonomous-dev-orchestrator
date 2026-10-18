@@ -2,7 +2,7 @@
 
 Mac mini M2 / 16GBの1台で動かす、複数GitHubプロジェクト用の自律開発オーケストレーターMVPです。Python 3.11以上・標準ライブラリのみ。初期設定は **dry-run、自動マージ無効、1ジョブ**。n8n、追加AI API、クラウドDB、Webhookサーバーは不要です。
 
-**実装済みの制御ループと、実アカウントで未検証のAI連携を区別しています。** MiniMax Codeが未導入の環境ではAI実装を開始できません。CLI出力形式・macOS sandboxとの互換性も、利用するバージョンで受入確認が必要です。課金APIへの代替経路はありません。
+**MiniMax Code 0.6.12のToken Planログインと、macOS sandbox内での単発変更生成を実環境で確認済みです。** AIによる連続修正・CodeRabbit承認・自動マージの実サービス受入は別途必要です。利用するCLIバージョンで受入確認を行ってください。課金APIへの代替経路はありません。
 
 ## フロー
 
@@ -50,7 +50,7 @@ cp examples/config.toml config.toml
 | 機能 | MVPの状態 |
 |---|---|
 | 複数対象のTOML登録、Issue opt-in、仕様・依存チェック | 実装済み。単一リポジトリ内の`Depends-On: #12, #13`のみ |
-| MiniMax実装・修正 | `mcode exec --mode lightweight`の変更JSONアダプター実装。実ログイン未検証 |
+| MiniMax実装・修正 | `mcode exec --mode lightweight`の変更JSONアダプター実装。0.6.12 Token Planで単発生成を検証済み |
 | 分離 | toolsなし、環境変数を限定、macOS Seatbelt、対象cloneなし。危険コマンド実行経路なし |
 | ブランチ・PR・CI・レビュー取得 | GitHub REST/GraphQL実装。全ページを上限付きで取得、欠落時は不合格 |
 | 修正上限・冪等性・再起動 | 初回+最大3回。予算を呼び出し前に保存。publish意図・commitを永続化 |

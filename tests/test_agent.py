@@ -40,6 +40,10 @@ const fs = require('fs'); const cp = require('child_process');
 let input = ''; process.stdin.on('data', x => input += x);
 process.stdin.on('end', () => {
   let denied = 0;
+  fs.writeFileSync(process.env.MINIMAX_DATA_DIR + '/runtime-db.bin', Buffer.alloc(3000000));
+  fs.unlinkSync(process.env.MINIMAX_DATA_DIR + '/runtime-db.bin');
+  fs.mkdirSync(process.env.MINIMAX_DATA_DIR + '.lock');
+  fs.rmdirSync(process.env.MINIMAX_DATA_DIR + '.lock');
   try { fs.readFileSync(OUTSIDE); } catch(e) { denied++; }
   try { fs.writeFileSync(OUTSIDE, 'bad'); } catch(e) { denied++; }
   try { cp.execFileSync('/bin/sh', ['-c', 'true']); } catch(e) { denied++; }
@@ -54,3 +58,32 @@ process.stdin.on('end', () => {
                 result = MiniMax(cfg).generate(issue(), {}, repo_config(), [])
             self.assertEqual(result, {"docs/a.md": "safe"})
             self.assertEqual(outside.read_text(), "must never be readable")
+
+    @unittest.skipUnless(platform.system() == "Darwin" and shutil.which("node"), "requires macOS and Node")
+    def test_model_output_budget_stops_large_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime, data = root / 'runtime', root / 'profile'
+            runtime.mkdir(); data.mkdir()
+            entry = runtime / 'cli.js'
+            entry.write_text("process.stdin.resume();process.stdin.on('end',()=>process.stdout.write('x'.repeat(2100000)));")
+            cfg = {'node': shutil.which('node'), 'entry':str(entry), 'runtime_root':str(runtime),
+                   'data_dir':str(data),'subscription_confirmed':True,'timeout_seconds':10}
+            with self.assertRaisesRegex(Blocked, 'output budget'):
+                MiniMax(cfg).generate(issue(), {}, repo_config(), [])
+
+    @unittest.skipUnless(platform.system() == "Darwin" and shutil.which("node"), "requires macOS and Node")
+    def test_deadline_terminates_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime, data = root / 'runtime', root / 'profile'
+            runtime.mkdir(); data.mkdir()
+            entry = runtime / 'cli.js'
+            entry.write_text("require('fs').writeFileSync(process.env.MINIMAX_DATA_DIR+'/pid',String(process.pid));setInterval(()=>{},1000);")
+            cfg = {'node':shutil.which('node'),'entry':str(entry),'runtime_root':str(runtime),
+                   'data_dir':str(data),'subscription_confirmed':True,'timeout_seconds':0.5}
+            with self.assertRaisesRegex(Blocked, 'deadline'):
+                MiniMax(cfg).generate(issue(), {}, repo_config(), [])
+            pid=int((data/'pid').read_text())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid,0)
