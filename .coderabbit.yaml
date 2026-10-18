@@ -1,5 +1,15 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 language: ja-JP
+
 reviews:
+  profile: chill
   request_changes_workflow: true
   allow_author_approval: false
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 5
+    drafts: false
+    base_branches: []
+    labels: []
