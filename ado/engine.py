@@ -140,8 +140,6 @@ class Engine:
             # Re-fetch all evidence immediately before merge, tied to same PR and head.
             fresh = self.gh.pr(repo, data["pr"])
             self.verify_pr(row, data, fresh)
-            if fresh["base"]["sha"] != data["base"] or self.gh.branch_head(repo, data["base_branch"]) != data["base"]:
-                raise Blocked("Base branch moved; rebase/re-review required")
             self.verify_diff(row, data)
             auto = self.config["auto_merge"] and cfg.get("auto_merge", False) and \
                 "ado:low-risk" in {x["name"] for x in issue["labels"]} and low_risk(data["all_changes"], cfg)
@@ -149,6 +147,8 @@ class Engine:
                 if phase != "AWAITING_HUMAN":
                     self.store.save(row, "AWAITING_HUMAN", data)
                 return
+            if fresh["base"]["sha"] != data["base"] or self.gh.branch_head(repo, data["base_branch"]) != data["base"]:
+                raise Blocked("Base branch moved; rebase/re-review required")
             if judge(fresh, self.gh.evidence(repo, fresh), cfg)[0] != "PASS":
                 raise Blocked("Review evidence changed before merge")
             self.gh.assert_protection(repo, data["base_branch"], cfg, self.gh.evidence(repo, fresh))

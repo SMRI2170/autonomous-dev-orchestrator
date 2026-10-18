@@ -193,3 +193,17 @@ class EngineTests(unittest.TestCase):
         self.publish()
         self.assertEqual(self.tick(), "BLOCKED")
         self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_allows_human_handoff_without_auto_merge(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.assertEqual(self.tick(), 'AWAITING_HUMAN')
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_blocks_auto_merge(self):
+        self.cfg['auto_merge'] = True
+        self.cfg['repositories'][0]['auto_merge'] = True
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.assertEqual(self.tick(), 'BLOCKED')
+        self.assertEqual(self.gh.merge_calls, 0)
