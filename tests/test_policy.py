@@ -58,6 +58,17 @@ class PolicyTests(unittest.TestCase):
             dependencies("Depends-On: https://evil.example/issue/12")
 
 
+    def test_review_provider_default_does_not_change_legacy_policy_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text('''[[repositories]]
+name = "owner/project"
+allowed_paths = ["docs/**/*.md"]
+trusted_authors = ["owner"]
+''')
+            repo = load(path)["repositories"][0]
+            self.assertNotIn("review_provider", repo)
+
     def test_review_provider_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"

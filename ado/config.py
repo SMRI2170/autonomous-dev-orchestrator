@@ -36,8 +36,9 @@ def load(path):
         repo.setdefault("issue_label", "ado:ready")
         repo.setdefault("required_checks", [{"name": "unit", "app": "github-actions"}])
         repo.setdefault("coderabbit_login", "coderabbitai[bot]")
-        repo.setdefault("review_provider", "coderabbit")
-        if repo["review_provider"] not in ("coderabbit", "minimax"):
+        # Do not mutate legacy configs merely to apply the default: active jobs
+        # persist a hash of repo config and must not be invalidated by an upgrade.
+        if repo.get("review_provider", "coderabbit") not in ("coderabbit", "minimax"):
             raise Blocked("review_provider must be coderabbit or minimax")
         if not repo["required_checks"]:
             raise Blocked("At least one CI check is required")

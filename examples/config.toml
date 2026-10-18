@@ -29,9 +29,9 @@ max_files = 5
 max_context_bytes = 150000
 max_change_bytes = 50000
 required_checks = [{name = "unit", app = "github-actions"}]
-# "coderabbit" keeps the previous bot approval gate; "minimax" runs a fresh,
-# tool-less local review using the existing subscription (manual merge only).
-review_provider = "coderabbit"
+# "minimax" runs a fresh tool-less local review with your existing subscription,
+# and ALWAYS requires human merging. Set "coderabbit" for the legacy bot gate.
+review_provider = "minimax"
 coderabbit_login = "coderabbitai[bot]"
 auto_merge = false
 auto_merge_paths = ["docs/**/*.md"]
