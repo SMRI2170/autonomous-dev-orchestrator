@@ -63,6 +63,36 @@ process.stdin.on('end', () => {
         with patch("platform.system", return_value="Darwin"), self.assertRaises(Blocked):
             MiniMax({}).generate(issue(), {}, repo_config(), [])
 
+    def test_runtime_status_reports_missing_configuration_without_model_call(self):
+        with patch("platform.system", return_value="Darwin"):
+            status = MiniMax({}).runtime_status()
+        self.assertFalse(status["compatible"])
+        self.assertFalse(status["model_called"])
+        self.assertFalse(status["authentication_verified"])
+
+    @unittest.skipUnless(platform.system() == "Darwin" and shutil.which("node"), "requires macOS and Node")
+    def test_doctor_help_probe_is_bounded_and_needs_no_login(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime, data = root / 'runtime', root / 'profile'
+            runtime.mkdir(); data.mkdir()
+            entry = runtime / 'cli.js'
+            # A CLI that never stops writing must not be able to fill the disk from `ado doctor`.
+            entry.write_text("""
+if (process.argv.includes('--help')) {
+  process.stdout.write('x'.repeat(2100000));
+  setInterval(() => {}, 1000);
+}
+""")
+            cfg = {'node': shutil.which('node'), 'entry': str(entry), 'runtime_root': str(runtime),
+                   'data_dir': str(data)}
+            status = MiniMax(cfg).runtime_status()
+            self.assertFalse(status["compatible"])
+            self.assertIn('output budget', status["reason"])
+            self.assertFalse(status["model_called"])
+            entry.write_text("console.log('exec --mode standard|lightweight');")
+            self.assertTrue(MiniMax(cfg).runtime_status()["compatible"])
+
     @unittest.skipUnless(platform.system() == "Darwin" and shutil.which("node"), "requires macOS and Node")
     def test_real_seatbelt_adapter_blocks_shell_and_outside_files(self):
         # Local CLI fixture tests the real OS boundary; no AI or network request.

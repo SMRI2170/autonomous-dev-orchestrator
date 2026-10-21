@@ -12,6 +12,9 @@ review_timeout_seconds = 86400
 subscription_confirmed = false
 # Use actual absolute paths from your own reviewed installation. No launcher shell.
 node = "/opt/homebrew/bin/node"
+# Match the pair to how MiniMax Code was installed, or `ado doctor` rejects it:
+#   npm package:  entry=.../node_modules/@minimax-ai/code/cli.js  runtime_root=.../node_modules/@minimax-ai
+#   source build: entry=.../minimax-code/dist/cli.js             runtime_root=.../minimax-code
 entry = "/absolute/path/to/minimax-code/dist/cli.js"
 runtime_root = "/absolute/path/to/minimax-code"
 # Dedicated profile, not your main HOME or a GitHub credential directory.

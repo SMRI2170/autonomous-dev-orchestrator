@@ -2,6 +2,40 @@
 
 検証日: 2026-10-18（Asia/Tokyo）。初期MVPの記録です。
 
+## 2026-10-21 追加検証
+
+- PR #7のCodeRabbit（CHANGES_REQUESTED）とCodex（P2 3件）の未解決指摘5件を修正し、59テスト成功、`compileall -q ado scripts tests`成功、`node --check ado/web/app.js`成功。ダッシュボードはHTTP 200と実データ投影を再確認。
+
+### 指摘と対処
+
+- キーボードフォーカスが再描画で失われる。工程ノードに`data-stage`、ジョブボタンに`dataset.job`を付け、再構築前にフォーカス要素を記録し一致する新要素へ戻す。
+- `/api/status`の取得失敗が無言で古い表示が残る。ライブ/demo両方で接続エラーを表示し、未取得時と取得済み時で文言を分ける。
+- 相対時刻（`0秒前`など）が変更なしポーリングで更新されない。`.job-age`を毎回の取得成功時に再計算する。
+- `ado doctor`のhelpプローブ出力が無制限だった。`generate`と同じストリーム単位2MB上限とプロセスグループ停止を共有ヘルパー`bounded_run`に統一し、`while(true)`で書き続けるCLIでも停止することをNode fixtureで実証。
+- `docs/setup.md`と`examples/config.toml`で`entry`がソースビルドの`dist/cli.js`固定だった。npm版とソースビルド版の対応表を追加し、`runtime_root`とのずれがdoctorで失敗する旨を明記。
+
+### 未検証
+
+- ブラウザによるキーボード操作とフォーカス復帰の実操作確認は未実施です。JSにはCIの自動テストがなく、PythonのテストはマーカーとHTTP応答までを確認します。
+- 上記helperの停止処理は、超過検知時に_readerスレッド_がSIGKILLを送り、主スレッドの`finally`が停止と回収を担保します。初回のみ15秒のタイムアウトが1回観測されましたが、再現せず（10回連続で成功）、原因は特定できていません。
+
+## 2026-10-20 追加検証
+
+- ローカルの読み取り専用フロー監視画面を追加。工程・Issueタイトル・待機理由・変更ファイル名・履歴とworker稼働情報を表示。ブラウザで実データ/dry-runとデモの切替、工程クリック、実装中表示を確認。新規dashboardテスト7件でモデル実行中の工程取得、読取りAPI、機密と本文の除外、dry-run候補、部分ログ、heartbeat、ライブstateを変更しないデモを確認。
+
+- Python 3.12.13、macOSで52テスト成功。sandboxの実テストで、専用profileの隣接`.lock`ディレクトリ作成・削除を許可しつつ、外部ファイルの読み書きとshell起動の拒否を確認。
+- `examples/config.toml`がgitignoreに巻き込まれて欠落していたため追加し、コピー・設定読込み・doctorの導入経路を修復。
+- 専用venvへのeditable install成功。専用stateを使い、本リポジトリのIssue #1をdry-runでELIGIBLEと判定。モデル呼出し・GitHub書込みなし。
+- 既存MiniMax Code 0.6.3は`--mode lightweight`非対応。専用ローカル領域に固定版0.6.9を導入し、sandbox内help起動とlightweight対応を確認。`doctor`にもモデルを呼ばない互換性診断を追加。
+- 実CLIでprofileロック拒否を再現し、profile隣接の`.lock`だけを許可して解消。専用profileのOAuthログイン成功をCLIで確認。
+- 0.6.9の既定モデル`MiniMax-M3.1-Flash-Preview`がmanaged token planの一覧に存在しない問題を確認。既存profileと同じMiniMax-M3を選択し、実モデルの応答を取得。
+- 従来の`RLIMIT_FSIZE=2MB`がCLIのSQLite WALやモデルカタログにも適用されるため失敗する問題を確認。stdout/stderrをそれぞれ2MBに制限する収集処理へ変更し、超過時にプロセス群を停止。実sandboxテストで2MB超のprofileファイル書込み、stdout/stderr超過時の拒否を確認。
+- productionのMiniMaxアダプターで`docs/ado-glossary.md`の変更JSONを生成し、`validate_changes`で合格。GitHubへは公開せず、生成結果はローカルの非公開stateに保存。実PRのモデル修正ループは未検証。
+- GitHub本人確認後、ブラウザでCodeRabbit AppがAll repositoriesに導入済みであることを確認。CodeRabbitの一覧エラーはセッション切れであり、本人の再ログイン後に本リポジトリのInstalled表示とレビュー設定画面の表示に成功。
+- 既存[PR #6](https://github.com/SMRI2170/autonomous-dev-orchestrator/pull/6)のhead `89e50d143dc7ea80fa7616cfb2be072c60ccce5c`について、productionのGitHub/evidence/judgeで実サービスの証拠を評価。現在SHAへのCodeRabbit Botの正式APPROVED、`checks / unit`成功、未解決スレッド0、mergeable cleanによりPASS。読み取りのみで、マージは未実施。このPRには別途進められていた追加実装も含まれ、本ローカル作業の変更が公開済みという意味ではない。
+- 既存[PR #5](https://github.com/SMRI2170/autonomous-dev-orchestrator/pull/5)はCodeRabbitのCOMMENTEDと未解決スレッド1件によりREPAIR。CIの定義が全コミットでの実行を断定する点への指摘を取得でき、正式承認なしで合格させないことも実証。PR #6のPASSと混同しないこと。
+- 自動マージ・常駐サービスは無効のまま。以下の初期検証と区別すること。
+
 ## ローカル
 
 Python 3.12.14、macOS、Node 26.3.1で`python -m unittest discover -v`の51件が成功。`compileall`も成功。

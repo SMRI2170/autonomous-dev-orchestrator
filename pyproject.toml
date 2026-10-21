@@ -14,3 +14,6 @@ ado = "ado.cli:main"
 
 [tool.setuptools]
 packages = ["ado"]
+
+[tool.setuptools.package-data]
+ado = ["web/*.html", "web/*.css", "web/*.js"]

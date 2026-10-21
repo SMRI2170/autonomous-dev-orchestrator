@@ -42,6 +42,47 @@ class Store:
         fd = os.open(self.root / "events.jsonl", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a") as file:
             file.write(line + "\n")
+        self.touch()
+
+    @contextmanager
+    def heartbeat(self):
+        """Publish liveness for the duration of a run.
+
+        Deliberately no background thread: the MiniMax adapter applies a child
+        rlimit through preexec_fn, which CPython documents as unsafe while
+        another thread may hold a lock at fork. Long calls pulse from their own
+        I/O loop instead, via touch().
+        """
+        self.touch(running=True)
+        try:
+            yield
+        finally:
+            self.touch(running=False)
+
+    def touch(self, running=True):
+        """Record liveness, atomically. A monitoring file must never stop a job."""
+        try:
+            target = self.root / "worker.json"
+            temporary = self.root / f".worker-{os.getpid()}.json"
+            temporary.write_text(json.dumps({"pid": os.getpid(), "time": time.time(), "running": running}))
+            temporary.chmod(0o600)
+            os.replace(temporary, target)
+        except OSError:
+            pass
+
+    def idle(self, seconds, interval=5):
+        """Wait for the next poll without going stale on the liveness file.
+
+        A thread would have done this, but the MiniMax adapter forks with
+        preexec_fn and CPython documents that as unsafe alongside threads.
+        """
+        end = time.monotonic() + seconds
+        while True:
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(interval, remaining))
+            self.touch()
 
     def add(self, repo, issue):
         self.db.execute("INSERT OR IGNORE INTO jobs(repo,issue,state,data,updated) VALUES(?,?,'QUEUED','{}',?)",

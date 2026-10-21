@@ -55,12 +55,19 @@ MINIMAX_DATA_DIR=/absolute/path/to/ado-minimax-profile mcode
 
 Globalでないアカウントは公式の該当地域用ログインを使います。対話UIの`/status`と`/provider`で、既存契約を使う公式アカウントであり、従量課金のcustom providerやAPIキーを使っていないことを確認します。利用枠超過時の挙動も契約側で確認してください。本ツールは請求情報APIを使いません。
 
-設定するパスは`node`実行体、CLIの`cli.js`（npm版はpackage直下、source buildでは`dist/cli.js`）、依存パッケージを含む`runtime_root`、専用`data_dir`です。シェルの`mcode`ランチャーは直接起動しません。ランチャー経由の任意コマンドや別CLIへのフォールバックは拒否します。
+設定するパスは`node`実行体、CLIのentry、依存パッケージを含む`runtime_root`、専用`data_dir`です。entryは導入方法で決まります。
+
+| 導入方法 | `entry` | `runtime_root` |
+|---|---|---|
+| npm配布版（0.6.12で確認） | `<インストール先>/node_modules/@minimax-ai/code/cli.js` | `<インストール先>/node_modules/@minimax-ai`を含む専用ディレクトリ |
+| ソースビルド | `<ビルド先>/dist/cli.js` | `<ビルド先>` |
+
+`runtime_paths()`は`entry`が`runtime_root`配下の`.js`であることを要求します。npm版でもソース版でも、この2つの対応がずれると`ado doctor`が`Entry must be a reviewed .js file under runtime_root`で失敗します。シェルの`mcode`ランチャーは直接起動しません。ランチャー経由の任意コマンドや別CLIへのフォールバックは拒否します。
 
 アダプターのコマンド契約:
 
 ```text
-node /reviewed/runtime/dist/cli.js exec --mode lightweight --input - --output-format json
+node <runtime_root配下のentry> exec --mode lightweight --max-steps 1 --input - --output-format json
 ```
 
 npm配布版0.6.12ではentryは`node_modules/@minimax-ai/code/cli.js`です。CLIはバージョンを固定し、既存インストールとは別の専用ディレクトリに置いてください。`mcode provider use token-plan`で既存契約の認証元を明示します。
@@ -68,6 +75,8 @@ npm配布版0.6.12ではentryは`node_modules/@minimax-ai/code/cli.js`です。C
 stdinで指示と許可済みファイルのスナップショットを渡します。標準出力は`{"status":"succeeded","output":"…"}`、outputはさらに`{"files":{"docs/example.md":"全文"}}`というJSON文字列である必要があります。Markdownフェンス、追加キー、重複キー、空変更は不合格。ファイル削除、rename、バイナリ、実行権限変更は未対応です。
 
 [公式のlightweightモード](https://github.com/MiniMax-AI/minimax-code#lightweight-conversations)はtoolsを渡さず、workspace instructions・Skills・memoryを省きます。本ツールはさらにOS側で実行とファイルアクセスを制限します。既存のCLI設定・hook・認証データの信頼性は専用プロファイル側で管理してください。CLI自身のセッション記録は本ツールのログマスキング対象外です。
+
+0.6.9の実機確認では、新規profileの既定モデル`MiniMax-M3.1-Flash-Preview`が既存契約のモデル一覧に存在せず失敗しました。専用profileの`config.yaml`で、実際に利用可能なモデルを選択してください。この環境では既存profileと同じ`defaultModel: minimax/MiniMax-M3`で生成に成功しました。APIキーや別providerへの切替は不要です。
 
 この契約を利用バージョンで小さなタスクにより確認し、`subscription_confirmed = true`にします。認証更新のためのネットワークと専用data dirの読み書きは許可されます。起動に不足するOSアクセスがあると失敗しBlockedになります。HOME全体の許可やsandbox無効化で回避しないでください。
 
