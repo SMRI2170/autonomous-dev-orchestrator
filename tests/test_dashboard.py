@@ -120,10 +120,26 @@ class DashboardTests(unittest.TestCase):
         store = Store(self.cfg['state_dir'])
         try:
             row = store.add('owner/project', 1)
+            # The last stage event before the reviewer starts is "checks"; the
+            # REVIEWING state must still win so the screen does not show checks.
+            store.event(row['id'], 'STEP', stage='checks')
             store.save(row, 'REVIEWING', {'resume': 'REVIEW', 'pr': 7})
             job = snapshot(self.cfg)['jobs'][0]
             self.assertEqual(job['stage'], 'review')
             self.assertEqual(job['state'], 'REVIEWING')
+        finally:
+            store.db.close()
+
+    def test_idle_polling_keeps_the_worker_looking_alive(self):
+        store = Store(self.cfg['state_dir'])
+        try:
+            with store.heartbeat():
+                before = json.loads((store.root / 'worker.json').read_text())['time']
+                store.idle(0.2, interval=0.05)
+                after = json.loads((store.root / 'worker.json').read_text())['time']
+                # Waiting between polls must refresh liveness, not leave it going stale.
+                self.assertGreater(after, before)
+                self.assertEqual(snapshot(self.cfg)['worker']['status'], 'online')
         finally:
             store.db.close()
 

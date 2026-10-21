@@ -153,6 +153,7 @@ class Engine:
                         raise Blocked("MiniMax reviewer unavailable; no fallback")
                     self.verify_diff(row, data)
                     # Recoverable GitHub reads must happen before REVIEWING is persisted.
+                    self.activity(row, "review")
                     originals, _ = self.gh.snapshot(repo, data["base"], cfg)
                     # Persist the in-flight review BEFORE using the subscription.
                     # Interrupted calls cannot be automatically replayed.

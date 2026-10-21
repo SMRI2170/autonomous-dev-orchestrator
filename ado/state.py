@@ -70,6 +70,20 @@ class Store:
         except OSError:
             pass
 
+    def idle(self, seconds, interval=5):
+        """Wait for the next poll without going stale on the liveness file.
+
+        A thread would have done this, but the MiniMax adapter forks with
+        preexec_fn and CPython documents that as unsafe alongside threads.
+        """
+        end = time.monotonic() + seconds
+        while True:
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(interval, remaining))
+            self.touch()
+
     def add(self, repo, issue):
         self.db.execute("INSERT OR IGNORE INTO jobs(repo,issue,state,data,updated) VALUES(?,?,'QUEUED','{}',?)",
                         (repo, issue, time.time()))

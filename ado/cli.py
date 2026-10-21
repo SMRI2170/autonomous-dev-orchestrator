@@ -2,7 +2,6 @@ import argparse
 import json
 import os
 import sys
-import time
 from .agent import MiniMax
 from .minimax_review import MiniMaxReviewer
 from .config import load
@@ -64,7 +63,7 @@ def main():
                     print(redact(json.dumps(engine.tick(), ensure_ascii=False)), flush=True)
                     if args.once:
                         break
-                    time.sleep(cfg["poll_seconds"])
+                    store.idle(cfg["poll_seconds"])
     except (Blocked, OSError, ValueError) as exc:
         print(redact(str(exc)), file=sys.stderr)
         return 2

@@ -83,7 +83,7 @@ def snapshot(config):
             history = [public_event(e) for e in events if e.get("job") == row["id"]][-60:]
             latest = history[-1] if history else {}
             stage = STATE_STAGE.get(row["state"], STATE_STAGE.get(data.get("resume"), "spec"))
-            if row["state"] in ("QUEUED", "BUILDING", "REVIEWING", "REVIEW", "BLOCKED"):
+            if row["state"] in ("QUEUED", "BUILDING", "REVIEW", "BLOCKED"):
                 stage = next((e["stage"] for e in reversed(history) if "stage" in e), stage)
             if data.get("resume") == "BUILDING" and row["state"] == "BLOCKED" and stage == "spec":
                 stage = "implement"
