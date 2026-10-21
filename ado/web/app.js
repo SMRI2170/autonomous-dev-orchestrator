@@ -518,6 +518,8 @@ async function refresh() {
         : "サーバーに接続できません。`ado dashboard`の起動を確認してください。",
     );
     $("connection-error").hidden = false;
+    // Retained records still age during an outage.
+    refreshAges();
   } finally {
     busy = false;
   }
