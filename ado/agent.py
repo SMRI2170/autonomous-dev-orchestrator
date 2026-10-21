@@ -44,11 +44,12 @@ def profile(node, runtime_root, data_dir, temp):
     ])
 
 
-def drain(proc, payload, deadline, limit=2_000_000):
+def drain(proc, payload, deadline, limit=2_000_000, pulse=None):
     """Write payload to stdin while reading both pipes under one combined byte budget.
 
     Enforcing the cap on read is what bounds a CLI that writes without stopping; the
-    caller's timeout only bounds how long it may run.
+    caller's timeout only bounds how long it may run. `pulse` is called on every pass
+    so the caller can publish liveness without running a background thread.
     """
     os.set_blocking(proc.stdin.fileno(), False)
     offset, total = 0, 0
@@ -63,6 +64,8 @@ def drain(proc, payload, deadline, limit=2_000_000):
         while selector.get_map():
             now = time.monotonic()
             remaining = deadline - now
+            if pulse is not None:
+                pulse()
             if remaining <= 0:
                 raise Blocked("MiniMax execution deadline exceeded")
             if proc.poll() is not None:
@@ -97,8 +100,10 @@ def drain(proc, payload, deadline, limit=2_000_000):
 
 
 class MiniMax:
-    def __init__(self, config):
+    def __init__(self, config, pulse=None):
         self.config = config
+        # Optional liveness callback, called while a call is in flight.
+        self.pulse = pulse
 
     def generate(self, issue, files, repo_config, feedback):
         return parse_changes(self.invoke(prompt(issue, files, repo_config, feedback)))
@@ -159,7 +164,7 @@ class MiniMax:
                     # Bounded exactly like generate(): a CLI that writes without
                     # stopping cannot fill the disk during `ado doctor`.
                     deadline = time.monotonic() + 15
-                    stdout, stderr = drain(proc, b"", deadline)
+                    stdout, stderr = drain(proc, b"", deadline, pulse=self.pulse)
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise Blocked("MiniMax help probe timed out inside sandbox")
@@ -200,7 +205,7 @@ class MiniMax:
             try:
                 timeout = cfg.get("timeout_seconds", 600)
                 deadline = time.monotonic() + timeout
-                stdout, _ = drain(proc, instruction.encode("utf-8"), deadline)
+                stdout, _ = drain(proc, instruction.encode("utf-8"), deadline, pulse=self.pulse)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise Blocked("MiniMax execution deadline exceeded")

@@ -2,7 +2,6 @@ import fcntl
 import json
 import os
 import sqlite3
-import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -43,40 +42,33 @@ class Store:
         fd = os.open(self.root / "events.jsonl", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a") as file:
             file.write(line + "\n")
+        self.touch()
 
     @contextmanager
     def heartbeat(self):
-        """Publish liveness without sharing the SQLite connection across threads."""
-        stopped = threading.Event()
-        target = self.root / "worker.json"
-        temporary = self.root / f".worker-{os.getpid()}.json"
+        """Publish liveness for the duration of a run.
 
-        def write(running):
-            temporary.write_text(json.dumps({"pid": os.getpid(), "time": time.time(), "running": running}))
-            temporary.chmod(0o600)
-            os.replace(temporary, target)
-
-        def pulse():
-            while not stopped.wait(5):
-                try:
-                    write(True)
-                except OSError:
-                    # Monitoring must not interrupt an in-flight job.
-                    pass
-
-        write(True)
-        thread = threading.Thread(target=pulse, daemon=True)
-        thread.start()
+        Deliberately no background thread: the MiniMax adapter applies a child
+        rlimit through preexec_fn, which CPython documents as unsafe while
+        another thread may hold a lock at fork. Long calls pulse from their own
+        I/O loop instead, via touch().
+        """
+        self.touch(running=True)
         try:
             yield
         finally:
-            stopped.set()
-            thread.join()
-            try:
-                if json.loads(target.read_text()).get("pid") == os.getpid():
-                    write(False)
-            except (OSError, ValueError):
-                pass
+            self.touch(running=False)
+
+    def touch(self, running=True):
+        """Record liveness, atomically. A monitoring file must never stop a job."""
+        try:
+            target = self.root / "worker.json"
+            temporary = self.root / f".worker-{os.getpid()}.json"
+            temporary.write_text(json.dumps({"pid": os.getpid(), "time": time.time(), "running": running}))
+            temporary.chmod(0o600)
+            os.replace(temporary, target)
+        except OSError:
+            pass
 
     def add(self, repo, issue):
         self.db.execute("INSERT OR IGNORE INTO jobs(repo,issue,state,data,updated) VALUES(?,?,'QUEUED','{}',?)",

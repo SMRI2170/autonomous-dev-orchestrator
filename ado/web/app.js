@@ -5,6 +5,7 @@ const names = {
   BUILDING: "実装中",
   PUBLISHING: "PR作成待ち",
   REVIEW: "CI・レビュー待ち",
+  REVIEWING: "レビュー実行中",
   AWAITING_HUMAN: "人間の確認待ち",
   BLOCKED: "停止",
   DONE: "完了",
@@ -138,6 +139,8 @@ function activity(job) {
     return `「${label}」のマージとIssue完了を確認しました。`;
   if (job.state === "AWAITING_HUMAN")
     return `「${label}」の変更は確認待ちです。PRの内容を確認してください。`;
+  if (job.state === "REVIEWING")
+    return `「${label}」をMiniMaxがレビュー中です。判定が出るまでお待ちください。`;
   if (job.waiting?.length) return translate(job.waiting[0]);
   const descriptions = {
     spec: `「${label}」の受入条件と依存関係を確認しています。`,
@@ -352,9 +355,11 @@ function renderFlow(job) {
                 ? "確認待ち"
                 : job.stage === "merge"
                   ? "マージ確認中"
-                  : job.state === "REVIEW"
-                    ? "待機・確認中"
-                    : "現在の工程";
+                  : job.state === "REVIEWING"
+                    ? "レビュー実行中"
+                    : job.state === "REVIEW"
+                      ? "待機・確認中"
+                      : "現在の工程";
       cls +=
         job.state === "DONE"
           ? " completed"

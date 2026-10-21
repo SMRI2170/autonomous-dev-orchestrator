@@ -103,6 +103,30 @@ class DashboardTests(unittest.TestCase):
         finally:
             store.db.close()
 
+    def test_unwritable_heartbeat_never_stops_the_worker(self):
+        # A monitoring file that cannot be written must not abort `ado run`.
+        store = Store(self.cfg['state_dir'])
+        try:
+            (store.root / 'worker.json').mkdir()
+            with store.heartbeat():
+                self.assertEqual(snapshot(self.cfg)['worker']['status'], 'unknown')
+                store.event(None, 'STEP', stage='spec')
+                row = store.add('owner/project', 1)
+                store.save(row, 'BUILDING', {})
+        finally:
+            store.db.close()
+
+    def test_in_flight_minimax_review_shows_the_review_stage(self):
+        store = Store(self.cfg['state_dir'])
+        try:
+            row = store.add('owner/project', 1)
+            store.save(row, 'REVIEWING', {'resume': 'REVIEW', 'pr': 7})
+            job = snapshot(self.cfg)['jobs'][0]
+            self.assertEqual(job['stage'], 'review')
+            self.assertEqual(job['state'], 'REVIEWING')
+        finally:
+            store.db.close()
+
     def test_http_is_local_read_only_and_rejects_unexpected_host(self):
         server = create_server(self.cfg, 0)
         thread = threading.Thread(target=server.serve_forever)

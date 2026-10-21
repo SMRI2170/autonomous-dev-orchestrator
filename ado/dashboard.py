@@ -24,7 +24,7 @@ STAGES = [
 ]
 STAGE_IDS = {x[0] for x in STAGES} | {"merge"}
 STATE_STAGE = {"QUEUED": "spec", "PLANNED": "spec", "BUILDING": "implement", "PUBLISHING": "publish",
-               "REVIEW": "review", "AWAITING_HUMAN": "handoff", "DONE": "done"}
+               "REVIEWING": "review", "REVIEW": "review", "AWAITING_HUMAN": "handoff", "DONE": "done"}
 
 
 def clean(value, limit=500):
@@ -83,7 +83,7 @@ def snapshot(config):
             history = [public_event(e) for e in events if e.get("job") == row["id"]][-60:]
             latest = history[-1] if history else {}
             stage = STATE_STAGE.get(row["state"], STATE_STAGE.get(data.get("resume"), "spec"))
-            if row["state"] in ("QUEUED", "BUILDING", "REVIEW", "BLOCKED"):
+            if row["state"] in ("QUEUED", "BUILDING", "REVIEWING", "REVIEW", "BLOCKED"):
                 stage = next((e["stage"] for e in reversed(history) if "stage" in e), stage)
             if data.get("resume") == "BUILDING" and row["state"] == "BLOCKED" and stage == "spec":
                 stage = "implement"
