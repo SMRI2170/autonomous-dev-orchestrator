@@ -27,6 +27,54 @@ def prompt(issue, files, config, feedback):
                            "files": files, "review_feedback": feedback}}, ensure_ascii=False)
 
 
+def bounded_run(cmd, cwd, env, timeout, targets, stdin=subprocess.DEVNULL, limit=2_000_000):
+    """Run a sandboxed CLI with a bounded per-stream capture; kill the group on overrun.
+
+    A CLI that loops instead of exiting is bounded by timeout, but without a cap it can
+    still fill the disk while the timeout runs.
+    """
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=stdin, start_new_session=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    oversized = threading.Event()
+    capture_failed = threading.Event()
+
+    def stop():
+        # A failure here must not kill the reader thread; the timeout still fails closed.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    def capture(stream, target):
+        size = 0
+        try:
+            with stream:
+                while chunk := stream.read(65536):
+                    size += len(chunk)
+                    if size > limit:
+                        oversized.set()
+                        stop()
+                        return
+                    target.buffer.write(chunk)
+        except Exception:
+            capture_failed.set()
+            stop()
+
+    readers = [threading.Thread(target=capture, args=pair)
+               for pair in ((proc.stdout, targets["stdout"]), (proc.stderr, targets["stderr"]))]
+    for reader in readers:
+        reader.start()
+    try:
+        proc.wait(timeout=timeout)
+    finally:
+        # Also terminate any surviving runtime children after a normal exit.
+        stop()
+        proc.wait()
+        for reader in readers:
+            reader.join()
+    return proc.returncode, oversized.is_set(), capture_failed.is_set()
+
+
 def profile(node, runtime_root, data_dir, temp):
     # JSON quoting is also valid Seatbelt string quoting; reject control chars upstream.
     q = lambda p: json.dumps(str(p))
@@ -79,13 +127,18 @@ class MiniMax:
                        "MINIMAX_DATA_DIR": str(paths["data_dir"]), "MAVIS_DATA_DIR": str(paths["data_dir"]),
                        "NO_COLOR": "1", "TERM": "dumb"}
                 with open(Path(temp) / "help", "w+") as output:
-                    result = subprocess.run(["/usr/bin/sandbox-exec", "-f", str(sb), str(paths["node"]),
-                                             str(paths["entry"]), "exec", "--help"],
-                                            stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.DEVNULL,
-                                            cwd=temp, env=env, timeout=15)
+                    code, oversized, capture_failed = bounded_run(
+                        ["/usr/bin/sandbox-exec", "-f", str(sb), str(paths["node"]),
+                         str(paths["entry"]), "exec", "--help"],
+                        cwd=temp, env=env, timeout=15,
+                        targets={"stdout": output, "stderr": output})
                     output.seek(0)
                     help_text = output.read(100000)
-                if result.returncode:
+                if oversized:
+                    raise Blocked("MiniMax help probe exceeded capture budget")
+                if capture_failed:
+                    raise Blocked("MiniMax help probe output capture failed")
+                if code:
                     raise Blocked("MiniMax help probe failed inside sandbox")
                 if "--mode" not in help_text or "lightweight" not in help_text:
                     raise Blocked("MiniMax CLI lacks --mode lightweight; use a compatible pinned release")
@@ -113,49 +166,14 @@ class MiniMax:
             source.write_text(prompt(issue, files, repo_config, feedback))
             with open(Path(temp) / "stdout", "w+") as out, open(Path(temp) / "stderr", "w+") as err:
                 with source.open("rb") as input_file:
-                    proc = subprocess.Popen(cmd, cwd=temp, env=env, stdin=input_file,
-                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-                oversized = threading.Event()
-                capture_failed = threading.Event()
-
-                def stop():
-                    try:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-
-                def capture(stream, target):
-                    size = 0
-                    try:
-                        with stream:
-                            while chunk := stream.read(65536):
-                                size += len(chunk)
-                                if size > 2_000_000:
-                                    oversized.set()
-                                    stop()
-                                    return
-                                target.buffer.write(chunk)
-                    except Exception:
-                        capture_failed.set()
-                        stop()
-
-                readers = [threading.Thread(target=capture, args=(stream, target))
-                           for stream, target in ((proc.stdout, out), (proc.stderr, err))]
-                for reader in readers:
-                    reader.start()
-                try:
-                    proc.wait(timeout=cfg.get("timeout_seconds", 600))
-                finally:
-                    # Also terminate any surviving runtime children after a normal exit.
-                    stop()
-                    proc.wait()
-                    for reader in readers:
-                        reader.join()
-                if oversized.is_set():
+                    code, oversized, capture_failed = bounded_run(
+                        cmd, cwd=temp, env=env, timeout=cfg.get("timeout_seconds", 600),
+                        targets={"stdout": out, "stderr": err}, stdin=input_file)
+                if oversized:
                     raise Blocked("MiniMax output exceeded capture budget")
-                if capture_failed.is_set():
+                if capture_failed:
                     raise Blocked("MiniMax output capture failed")
-                if proc.returncode:
+                if code:
                     raise Blocked("MiniMax failed or sandbox denied access; verify CLI contract/login")
                 out.seek(0)
                 try:

@@ -11,6 +11,8 @@ max_repairs = 3
 # Confirm the existing subscription and CLI contract before enabling this flag.
 subscription_confirmed = false
 node = "/opt/homebrew/bin/node"
+# npm配布版: .../node_modules/@minimax-ai/code/cli.js (runtime_root=.../node_modules/@minimax-ai)
+# ソースビルド: .../minimax-code/dist/cli.js (runtime_root=.../minimax-code)
 entry = "/absolute/path/to/minimax-code/dist/cli.js"
 runtime_root = "/absolute/path/to/minimax-code"
 data_dir = "/absolute/path/to/ado-minimax-profile"

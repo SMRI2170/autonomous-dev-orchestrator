@@ -77,3 +77,10 @@ process.stdin.on('end', () => {
                 entry.write_text("process." + stream + ".write('x'.repeat(2100000));")
                 with self.subTest(stream=stream), self.assertRaisesRegex(Blocked, 'capture budget'):
                     MiniMax(cfg).generate(issue(), {}, repo_config(), [])
+            # The help probe must be bounded too: a looping CLI cannot fill the disk during `ado doctor`.
+            for stream in ['stdout', 'stderr']:
+                entry.write_text("while(true) process." + stream + ".write('x'.repeat(65536));")
+                with self.subTest(stream=stream):
+                    status = MiniMax(cfg).runtime_status()
+                self.assertFalse(status["compatible"])
+                self.assertIn('capture budget', status["reason"])

@@ -32,6 +32,9 @@ let data,
 const mobile = window.matchMedia("(max-width:680px)");
 let view = [0, 0, 870, 625],
   drag = null;
+// Rebuilt nodes, so focus can be restored onto the matching element after replaceChildren().
+let jobNodes = new Map(),
+  stageNodes = new Map();
 function visibleStage(id) {
   return id === "merge" ? "done" : id;
 }
@@ -149,6 +152,7 @@ function activity(job) {
   return descriptions[job.stage] || "保存された進捗を確認しています。";
 }
 function render() {
+  const focusedJob = document.activeElement?.dataset?.job;
   $("demo-notice").hidden = !demo;
   $("connection-error").hidden = !failed;
   const options = ["", ...data.repositories];
@@ -178,13 +182,16 @@ function render() {
   const job = currentJob();
   text("job-count", jobs.length);
   $("jobs").replaceChildren();
+  jobNodes = new Map();
   for (const j of jobs) {
     const b = element("button", `job${j.id === selected ? " selected" : ""}`);
     b.setAttribute("aria-pressed", String(j.id === selected));
+    b.dataset.job = String(j.id);
+    jobNodes.set(String(j.id), b);
     const top = element("div", "job-top");
     top.append(
       element("span", "", `#${j.issue}`),
-      element("span", "", j.updated ? elapsed(j.updated) : ""),
+      age(j.updated),
     );
     const status = element("div", `job-status ${stateClass(j.state)}`);
     status.append(
@@ -216,6 +223,7 @@ function render() {
     );
     $("jobs").append(empty);
   }
+  if (focusedJob !== undefined) jobNodes.get(focusedJob)?.focus();
   const worker = data.worker.status;
   text(
     "worker-label",
@@ -261,9 +269,21 @@ function render() {
   renderDetails(job);
   renderHistory(job);
 }
+function age(stamp) {
+  const e = element("span", "job-age", stamp ? elapsed(stamp) : "");
+  if (stamp) e.dataset.updated = stamp;
+  return e;
+}
+function refreshAges() {
+  for (const e of $("jobs").querySelectorAll(".job-age"))
+    if (e.dataset.updated)
+      e.textContent = elapsed(Number(e.dataset.updated));
+}
 function renderFlow(job) {
   const root = $("flow");
+  const focusedStage = document.activeElement?.dataset?.stage;
   root.replaceChildren();
+  stageNodes = new Map();
   const defs = svg("defs");
   const marker = svg("marker", {
     id: "arrow",
@@ -347,6 +367,7 @@ function renderFlow(job) {
       class: cls,
       role: "button",
       tabindex: 0,
+      "data-stage": stage.id,
       "aria-label": `${stage.label}：${status}`,
       "aria-pressed": String(
         (visibleStage(selectedStage || job?.stage) || "spec") === stage.id,
@@ -363,21 +384,24 @@ function renderFlow(job) {
       svg("circle", { cx: x + 20, cy: y + 83, r: 3, class: "status-mark" }),
       svg("text", { x: x + 30, y: y + 87, class: "status" }, status),
     );
-    const select = () => {
+    const select = (viaKeyboard) => {
       selectedStage = stage.id;
       renderDetails(job);
       renderFlow(job);
+      if (viaKeyboard) stageNodes.get(stage.id)?.focus();
     };
-    group.onclick = select;
+    group.onclick = () => select(false);
     group.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        select();
+        select(true);
       }
     };
     root.append(group);
+    stageNodes.set(stage.id, group);
   });
   root.setAttribute("viewBox", view.join(" "));
+  if (focusedStage !== undefined) stageNodes.get(focusedStage)?.focus();
 }
 function renderDetails(job) {
   const id = visibleStage(selectedStage || job?.stage) || "spec";
@@ -482,12 +506,18 @@ async function refresh() {
           ? `最終応答 ${clock(data.worker.last_seen)}`
           : "進捗記録のみ表示",
       );
+      refreshAges();
     }
   } catch {
-    if (mode === demo) {
-      failed = true;
-      $("connection-error").hidden = false;
-    }
+    // Live polling fails silently otherwise, leaving stale progress on screen.
+    failed = true;
+    text(
+      "connection-error",
+      data
+        ? "サーバーに接続できません。最後に取得した記録を表示しています。"
+        : "サーバーに接続できません。`ado dashboard`の起動を確認してください。",
+    );
+    $("connection-error").hidden = false;
   } finally {
     busy = false;
   }

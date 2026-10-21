@@ -56,12 +56,19 @@ MINIMAX_DATA_DIR=/absolute/path/to/ado-minimax-profile mcode
 
 Globalでないアカウントは公式の該当地域用ログインを使います。対話UIの`/status`と`/provider`で、既存契約を使う公式アカウントであり、従量課金のcustom providerやAPIキーを使っていないことを確認します。利用枠超過時の挙動も契約側で確認してください。本ツールは請求情報APIを使いません。
 
-設定するパスは`node`実行体、CLIの`dist/cli.js`、依存パッケージを含む`runtime_root`、専用`data_dir`です。シェルの`mcode`ランチャーは直接起動しません。ランチャー経由の任意コマンドや別CLIへのフォールバックは拒否します。
+設定するパスは`node`実行体、CLIのentry、依存パッケージを含む`runtime_root`、専用`data_dir`です。entryは導入方法で決まります。
+
+| 導入方法 | `entry` | `runtime_root` |
+|---|---|---|
+| npm配布版 | `<インストール先>/node_modules/@minimax-ai/code/cli.js` | `<インストール先>/node_modules/@minimax-ai`を含む専用ディレクトリ |
+| ソースビルド | `<ビルド先>/dist/cli.js` | `<ビルド先>` |
+
+`runtime_paths()`は`entry`が`runtime_root`配下の`.js`であることを要求します。npm版でもソース版でも、この2つの対応がずれると`ado doctor`が`Entry must be a reviewed .js file under runtime_root`で失敗します。シェルの`mcode`ランチャーは直接起動しません。ランチャー経由の任意コマンドや別CLIへのフォールバックは拒否します。
 
 アダプターのコマンド契約:
 
 ```text
-node /reviewed/runtime/dist/cli.js exec --mode lightweight --input - --output-format json
+node <runtime_root配下のentry> exec --mode lightweight --input - --output-format json
 ```
 
 stdinで指示と許可済みファイルのスナップショットを渡します。標準出力は`{"status":"succeeded","output":"…"}`、outputはさらに`{"files":{"docs/example.md":"全文"}}`というJSON文字列である必要があります。Markdownフェンス、追加キー、重複キー、空変更は不合格。ファイル削除、rename、バイナリ、実行権限変更は未対応です。
