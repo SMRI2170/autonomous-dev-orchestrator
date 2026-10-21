@@ -1,0 +1,32 @@
+# Copy to config.toml and review the repository settings before use.
+dry_run = true
+auto_merge = false
+state_dir = "~/.local/state/ado"
+poll_seconds = 60
+review_timeout_seconds = 86400
+max_repairs = 3
+
+[minimax]
+# Replace these absolute paths with your reviewed installation and dedicated profile.
+# Confirm the existing subscription and CLI contract before enabling this flag.
+subscription_confirmed = false
+node = "/opt/homebrew/bin/node"
+entry = "/absolute/path/to/minimax-code/dist/cli.js"
+runtime_root = "/absolute/path/to/minimax-code"
+data_dir = "/absolute/path/to/ado-minimax-profile"
+timeout_seconds = 600
+
+[[repositories]]
+# Reference only: copying this file does not modify the target repository.
+name = "SMRI2170/animal-shadow-match"
+trusted_authors = ["SMRI2170"]
+issue_label = "ado:ready"
+allowed_paths = ["docs/**/*.md"]
+context_paths = ["README.md"]
+# Replace with the exact check name returned by the target repository's CI.
+required_checks = [{ name = "unit", app = "github-actions" }]
+coderabbit_login = "coderabbitai[bot]"
+auto_merge = false
+auto_merge_paths = ["docs/**/*.md"]
+max_files = 5
+max_change_bytes = 50000

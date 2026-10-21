@@ -2,10 +2,14 @@ import hashlib
 import json
 import time
 from datetime import datetime, timezone
-from .policy import (Blocked, dependencies, inspect_text, low_risk, validate_changes)
+from .policy import (Blocked, dependencies, inspect_text, low_risk, redact, validate_changes)
 from .review import judge
 
 TERMINAL = {"DONE", "BLOCKED"}
+
+
+def redact_title(title):
+    return redact(" ".join(title.split()))[:180]
 
 
 def digest(value):
@@ -52,7 +56,7 @@ class Engine:
                             result = "ELIGIBLE"
                         except Blocked as exc:
                             result = str(exc)
-                        planned.append({"repo": name, "issue": issue["number"], "result": result})
+                        planned.append({"repo": name, "issue": issue["number"], "title": redact_title(issue["title"]), "result": result})
                 self.store.event(None, "DRY_RUN", planned=planned)
                 return {"dry_run": True, "planned": planned, "agent_called": False, "github_writes": False}
             active = [r for r in self.store.rows() if r["state"] not in TERMINAL]
@@ -85,6 +89,7 @@ class Engine:
 
     def current_issue(self, row, cfg, data):
         issue = self.gh.issue(row["repo"], row["issue"])
+        data["issue_title"] = redact_title(issue["title"])
         if not eligible(issue, cfg):
             raise Blocked("Issue opt-in/author/open state changed")
         self.specification(row["repo"], issue)
@@ -93,6 +98,9 @@ class Engine:
             raise Blocked("Specification changed; create a new reviewed issue")
         data["spec_hash"] = spec_hash
         return issue
+
+    def activity(self, row, stage, **fields):
+        self.store.event(row["id"], "STEP", stage=stage, **fields)
 
     def step(self, row, data):
         repo, phase = row["repo"], row["state"]
@@ -106,14 +114,18 @@ class Engine:
         data["policy_hash"] = policy_hash
         # Reconcile a completed remote merge before requiring the issue to be open.
         if phase in ("REVIEW", "AWAITING_HUMAN"):
+            self.activity(row, "review")
             pr = self.gh.pr(repo, data["pr"])
             self.verify_pr(row, data, pr)
             if pr.get("merged"):
+                self.activity(row, "done")
                 self.gh.close_issue(repo, row["issue"])
                 self.store.save(row, "DONE", data)
                 return
             if pr["state"] != "open":
                 raise Blocked("PR closed without merge")
+        if phase == "QUEUED":
+            self.activity(row, "spec")
         issue = self.current_issue(row, cfg, data)
         if phase == "QUEUED":
             meta = self.gh.metadata(repo)
@@ -123,11 +135,15 @@ class Engine:
         elif phase == "PUBLISHING":
             self.publish(row, data)
         elif phase in ("REVIEW", "AWAITING_HUMAN"):
+            self.activity(row, "checks")
             decision, feedback = judge(pr, self.gh.evidence(repo, pr), cfg)
+            if decision != "WAIT":
+                self.activity(row, "review")
             if time.time() - data["review_started"] > self.config["review_timeout_seconds"]:
                 raise Blocked("Review/CI/human-merge deadline exceeded")
             if decision == "WAIT":
-                self.store.event(row["id"], "WAIT", reasons=feedback)
+                stage = "checks" if any(x.startswith(("missing CI", "running CI")) for x in feedback) else "review"
+                self.store.event(row["id"], "WAIT", stage=stage, reasons=feedback)
                 return
             if decision == "REPAIR":
                 if phase == "AWAITING_HUMAN":
@@ -152,6 +168,7 @@ class Engine:
             if judge(fresh, self.gh.evidence(repo, fresh), cfg)[0] != "PASS":
                 raise Blocked("Review evidence changed before merge")
             self.gh.assert_protection(repo, data["base_branch"], cfg, self.gh.evidence(repo, fresh))
+            self.activity(row, "merge")
             self.gh.merge(repo, data["pr"], data["head"])
             # Closing is a separate, retry-safe step on the next poll.
             self.store.save(row, "REVIEW", data)
@@ -162,11 +179,14 @@ class Engine:
         if data["calls"] >= 1 + self.config["max_repairs"]:
             raise Blocked("Model call budget exhausted")
         parent = data.get("head", data["base"])
+        self.activity(row, "context")
         files, modes = self.gh.snapshot(row["repo"], parent, cfg)
         data["calls"] += 1
         self.store.save(row, "BUILDING", data)  # reserve budget BEFORE any model invocation
         try:
+            self.activity(row, "implement", repairing=bool(feedback), file_count=len(files))
             changes = self.agent.generate(issue, files, cfg, feedback)
+            self.activity(row, "validate")
             validate_changes(changes, cfg, files)
             for path in changes:
                 parts = path.split("/")
@@ -188,6 +208,7 @@ class Engine:
             raise
 
     def publish(self, row, data):
+        self.activity(row, "publish")
         # Commit generation is deterministic for stored parent/content/date; repeated POSTs are safe.
         if not data.get("intent_sha"):
             data["intent_sha"] = self.gh.make_commit(row["repo"], data["parent"], data["changes"], data["date"], row["issue"])

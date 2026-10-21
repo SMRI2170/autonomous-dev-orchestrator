@@ -13,7 +13,7 @@ n8nを追加する場合もSQLiteを唯一の状態元に保ちます。読み�
 
 ## 可視化とProjects
 
-MVPは`ado status`、events.jsonl、Issue/PRのリンクで状態を確認します。DBの状態:
+MVPは`ado dashboard`の[ローカルフロー監視画面](dashboard.md)、`ado status`、events.jsonl、Issue/PRのリンクで状態を確認します。監視画面は既存SQLiteの読み取り専用APIとローカルのHTML/CSS/JavaScriptで構成し、外部依存や別の実行エンジンを追加しません。DBの状態:
 
 | 状態 | 意味 |
 |---|---|
@@ -43,7 +43,7 @@ Codexは常時起動しません。大きなIssueの仕様整理、Blockedの原
 - trusted authorのIssue編集・ラベル解除を毎段階で確認。GitHub API全体のトランザクションはないため管理者との同時操作は避ける。
 - CodeRabbitが無料枠でAPPROVEDを返さない場合、承認の意味を自然言語から推測しない。
 - CI全文ログ/成果物ダウンロードは未実装。check summary、conclusion、レビュー本文、未解決スレッドを修正入力として収集する。
-- 通知配信、n8n、Projects書込み、ライブのWeb UI、複数ホスト、fair scheduling、ログrotationは未実装。
+- 通知配信、n8n、Projects書込み、Web上でのフロー編集・ジョブ操作、複数ホスト、fair scheduling、ログrotationは未実装。
 
 ## 一次資料
 

@@ -22,9 +22,15 @@ def main():
     retry = sub.add_parser("retry")
     retry.add_argument("job", type=int)
     sub.add_parser("doctor")
+    dashboard = sub.add_parser("dashboard", help="Read-only local flow monitor")
+    dashboard.add_argument("--port", type=int, default=8765)
     try:
         args = parser.parse_args()
         cfg = load(args.config)
+        if args.command == "dashboard":
+            from .dashboard import serve
+            serve(cfg, args.port)
+            return 0
         store = Store(cfg["state_dir"])
         if args.command == "status":
             print(json.dumps([{"job": r["id"], "repo": r["repo"], "issue": r["issue"], "state": r["state"],
@@ -42,14 +48,16 @@ def main():
                               "auto_merge": cfg["auto_merge"], "repository_count": len(cfg["repositories"]),
                               "explicit_github_token": bool(os.environ.get("GH_TOKEN")),
                               "subscription_confirmed": cfg.get("minimax", {}).get("subscription_confirmed", False),
+                              "minimax_runtime": MiniMax(cfg.get("minimax", {})).runtime_status(),
                               "projects_write_supported": False, "codex_automatic_supported": False}, indent=2))
         else:
             engine = Engine(cfg, store, GitHub(cfg["dry_run"]), MiniMax(cfg.get("minimax", {})))
-            while True:
-                print(redact(json.dumps(engine.tick(), ensure_ascii=False)), flush=True)
-                if args.once:
-                    break
-                time.sleep(cfg["poll_seconds"])
+            with store.heartbeat():
+                while True:
+                    print(redact(json.dumps(engine.tick(), ensure_ascii=False)), flush=True)
+                    if args.once:
+                        break
+                    time.sleep(cfg["poll_seconds"])
     except (Blocked, OSError, ValueError) as exc:
         print(redact(str(exc)), file=sys.stderr)
         return 2

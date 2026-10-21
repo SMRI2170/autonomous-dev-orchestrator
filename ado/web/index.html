@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ADO · Flow monitor</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="ADO ホーム"
+        ><span class="brand-mark">a<span>↗</span></span
+        ><strong>ADO<span class="brand-sub"> / Flow monitor</span></strong></a
+      >
+      <div class="top-actions">
+        <span class="readonly">◉ 読み取り専用</span
+        ><button id="demo" class="button" aria-pressed="false">
+          デモを見る
+        </button>
+      </div>
+    </header>
+    <div id="demo-notice" class="demo-notice" hidden>
+      デモ表示 · サンプルデータです。実際のジョブには影響しません。
+    </div>
+    <div id="connection-error" class="error-notice" role="alert" hidden>
+      状態を取得できません。最後に取得した記録を表示しています。
+    </div>
+    <main class="workspace">
+      <aside class="sidebar">
+        <div class="section-title">
+          <span class="eyebrow">WORKSPACE</span
+          ><span id="job-count" class="count">0</span>
+        </div>
+        <label class="filter-label" for="repository">プロジェクト</label
+        ><select id="repository">
+          <option value="">すべてのプロジェクト</option>
+        </select>
+        <div class="sidebar-heading">
+          <h1>ワークフロー</h1>
+          <span class="subtle">更新 3秒ごと</span>
+        </div>
+        <div id="jobs" class="job-list"></div>
+        <div class="sidebar-footer">
+          <span id="worker-dot" class="dot"></span>
+          <div>
+            <strong id="worker-label">稼働状態を確認中</strong
+            ><span id="worker-time" class="subtle"></span>
+          </div>
+        </div>
+      </aside>
+      <section class="flow-panel" aria-label="実行フロー">
+        <div class="flow-heading">
+          <div>
+            <div id="project-name" class="eyebrow">AUTONOMOUS DEVELOPMENT</div>
+            <h2 id="job-title">作業の流れを、一目で。</h2>
+            <div class="job-meta">
+              <span id="job-number">Issueを選択してください</span
+              ><span id="mode" class="mode">DRY RUN</span
+              ><span id="repair-count"></span>
+            </div>
+          </div>
+          <span id="job-state" class="state-pill">未開始</span>
+        </div>
+        <div class="activity-banner">
+          <span id="activity-dot" class="activity-dot"></span>
+          <div>
+            <span id="activity-label" class="eyebrow">CURRENT ACTIVITY</span>
+            <p id="activity">
+              処理を開始すると、現在の工程と内容がここに表示されます。
+            </p>
+          </div>
+        </div>
+        <div class="canvas-toolbar">
+          <div class="legend">
+            <span><i class="legend-done"></i>完了</span
+            ><span><i class="legend-active"></i>現在地</span
+            ><span><i class="legend-next"></i>未実行</span>
+          </div>
+          <div class="canvas-actions">
+            <button id="zoom-out" class="icon-button" aria-label="縮小">
+              −</button
+            ><button id="zoom-in" class="icon-button" aria-label="拡大">
+              ＋</button
+            ><button id="fit" class="button plain">全体</button
+            ><button id="locate" class="button plain">現在地</button>
+          </div>
+        </div>
+        <div class="canvas" id="canvas">
+          <svg
+            id="flow"
+            viewBox="0 0 870 625"
+            role="group"
+            aria-label="開発フロー。各工程をクリックすると詳細を表示します"
+          ></svg>
+        </div>
+        <div class="canvas-caption">
+          <span>工程をクリックして内容を確認 · ドラッグで移動</span
+          ><span id="updated">未取得</span>
+        </div>
+        <section class="history">
+          <div class="history-heading">
+            <h3>最近の動き</h3>
+            <span class="eyebrow">ACTIVITY LOG</span>
+          </div>
+          <ol id="timeline"></ol>
+        </section>
+      </section>
+      <aside class="details" aria-label="選択した工程の詳細">
+        <div class="eyebrow">STEP DETAILS</div>
+        <div class="detail-heading">
+          <span id="detail-number" class="step-number">01</span>
+          <h3 id="detail-title">仕様を確認</h3>
+        </div>
+        <p id="detail-description" class="detail-description"></p>
+        <div class="detail-section">
+          <h4>今回の作業</h4>
+          <p id="task-summary">まだジョブがありません。</p>
+        </div>
+        <div class="detail-section" id="reason-section" hidden>
+          <h4 id="reason-heading">待機の理由</h4>
+          <p id="reason" class="reason"></p>
+        </div>
+        <div class="detail-section">
+          <h4>実行情報</h4>
+          <dl>
+            <div>
+              <dt>保存された状態</dt>
+              <dd id="detail-state">—</dd>
+            </div>
+            <div>
+              <dt>モデル呼出し</dt>
+              <dd id="detail-calls">—</dd>
+            </div>
+            <div>
+              <dt>修正回数</dt>
+              <dd id="detail-repairs">—</dd>
+            </div>
+            <div>
+              <dt>コミット</dt>
+              <dd id="detail-sha">—</dd>
+            </div>
+          </dl>
+        </div>
+        <div class="detail-section">
+          <h4>変更するファイル</h4>
+          <ul id="files" class="file-list"></ul>
+        </div>
+        <div id="links" class="detail-links"></div>
+        <div class="detail-note">
+          保存された進捗を表示しています。workerの稼働状況は左下で確認できます。
+        </div>
+      </aside>
+    </main>
+    <footer class="bottom-bar">
+      <span>ADO <span class="subtle">/ Local workflow observability</span></span
+      ><span
+        >SQLite → ローカル画面
+        <span class="subtle">· 自動マージの設定変更なし</span></span
+      >
+    </footer>
+  </body>
+</html>

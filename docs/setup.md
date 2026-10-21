@@ -47,6 +47,8 @@ CIはtrusted設定です。既存workflowが有料Runner・他の有料サービ
 
 [公式インストール手順](https://github.com/MiniMax-AI/minimax-code#quick-start)でバージョンを固定して導入し、専用プロファイルを作成します。自動インストールやAPIキー発行は行いません。
 
+`--mode lightweight`に対応する版を使用してください。ローカル確認では0.6.3は非対応、0.6.9はsandbox内の`exec --help`が成功しています。`ado doctor`の`minimax_runtime.compatible`で、設定パスとCLIの対応を確認できます。この診断はモデルを呼び出さず、認証成功を保証しません。npm配布版のentryは、インストール先の`node_modules/@minimax-ai/code/cli.js`です。`runtime_root`には、その依存パッケージを含む専用インストール先を指定してください。
+
 ```sh
 MINIMAX_DATA_DIR=/absolute/path/to/ado-minimax-profile mcode login --region global
 MINIMAX_DATA_DIR=/absolute/path/to/ado-minimax-profile mcode
@@ -67,6 +69,8 @@ stdinで指示と許可済みファイルのスナップショットを渡しま
 [公式のlightweightモード](https://github.com/MiniMax-AI/minimax-code#lightweight-conversations)はtoolsを渡さず、workspace instructions・Skills・memoryを省きます。本ツールはさらにOS側で実行とファイルアクセスを制限します。既存のCLI設定・hook・認証データの信頼性は専用プロファイル側で管理してください。CLI自身のセッション記録は本ツールのログマスキング対象外です。
 
 この契約を利用バージョンで小さなタスクにより確認し、`subscription_confirmed = true`にします。認証更新のためのネットワークと専用data dirの読み書きは許可されます。起動に不足するOSアクセスがあると失敗しBlockedになります。HOME全体の許可やsandbox無効化で回避しないでください。
+
+0.6.9の実機確認では、新規profileの既定モデル`MiniMax-M3.1-Flash-Preview`が既存契約のモデル一覧に存在せず失敗しました。専用profileの`config.yaml`で、実際に利用可能なモデルを選択してください。この環境では既存profileと同じ`defaultModel: minimax/MiniMax-M3`で生成に成功しました。APIキーや別providerへの切替は不要です。
 
 ## 5. ライブ実行（自動マージは無効のまま）
 

@@ -2,7 +2,7 @@
 
 Mac mini M2 / 16GBの1台で動かす、複数GitHubプロジェクト用の自律開発オーケストレーターMVPです。Python 3.11以上・標準ライブラリのみ。初期設定は **dry-run、自動マージ無効、1ジョブ**。n8n、追加AI API、クラウドDB、Webhookサーバーは不要です。
 
-**実装済みの制御ループと、実アカウントで未検証のAI連携を区別しています。** MiniMax Codeが未導入の環境ではAI実装を開始できません。CLI出力形式・macOS sandboxとの互換性も、利用するバージョンで受入確認が必要です。課金APIへの代替経路はありません。
+**実装済みの制御ループと、実サービスの受入確認範囲を区別しています。** MiniMax Codeはlightweight対応版が必要です。0.6.9と既存契約のMiniMax-M3でsandbox内の変更生成・検査に成功しました。0.6.3は非対応です。`doctor`でCLI互換性を診断できますが、利用環境ごとのログイン・モデル呼出しは別途確認してください。課金APIへの代替経路はありません。
 
 ## フロー
 
@@ -45,18 +45,26 @@ cp examples/config.toml config.toml
 
 ライブ運用の手順は[セットアップ](docs/setup.md)、常駐方法は[launchd](docs/launchd.md)、安全条件は[セキュリティ設計](docs/security.md)、動作確認と未実装事項は[検証結果](docs/verification.md)を参照してください。
 
+## フローを画面で見る
+
+```sh
+.venv/bin/python -m ado --config config.toml dashboard
+```
+
+http://127.0.0.1:8765/ でIssueごとの現在地、実装している内容、待機・停止理由、修正回数を確認できます。工程をクリックすると説明が開き、3秒ごとに更新します。「デモを見る」で表示例も確認できます。読み取り専用で、起動によるworker実行・GitHub書込みはありません。詳しくは[フロー監視画面](docs/dashboard.md)を参照してください。
+
 ## 実装範囲
 
 | 機能 | MVPの状態 |
 |---|---|
 | 複数対象のTOML登録、Issue opt-in、仕様・依存チェック | 実装済み。単一リポジトリ内の`Depends-On: #12, #13`のみ |
-| MiniMax実装・修正 | `mcode exec --mode lightweight`の変更JSONアダプター実装。実ログイン未検証 |
+| MiniMax実装・修正 | 0.6.9 + MiniMax-M3で実ログイン・sandbox内変更生成・検査に成功。実PRの修正ループは未検証 |
 | 分離 | toolsなし、環境変数を限定、macOS Seatbelt、対象cloneなし。危険コマンド実行経路なし |
 | ブランチ・PR・CI・レビュー取得 | GitHub REST/GraphQL実装。全ページを上限付きで取得、欠落時は不合格 |
 | 修正上限・冪等性・再起動 | 初回+最大3回。予算を呼び出し前に保存。publish意図・commitを永続化 |
 | 自動マージ | 既定OFF。docs内Markdownのみ。SHA一致、CI/CodeRabbit承認、未解決指摘ゼロ、保護ブランチ必須 |
 | Issue完了・次Issue | 実際のマージ済み状態を確認後に完了。Blockedは自動再試行しない |
-| 可視化 | `ado status`、JSONL、PR。GitHub Projectsは手動/組込みauto-addの利用を提案 |
+| 可視化 | `ado dashboard`のローカルフロー画面、`ado status`、JSONL、PR。工程・作業内容・待機理由とworkerの稼働状態を表示 |
 | GitHub Projects書込み、n8n、Codex自動呼出し | **未実装**。比較と拡張案は[設計判断](docs/architecture.md) |
 
 `run --once`は1回の状態遷移です。通常の`run`は60秒間隔で継続します。CI/レビュー待ち・人間のマージ待ちも1つのアクティブジョブとして扱います。安全な小規模変更向けMVPであり、任意規模のFlutter/Unity開発を自律完遂するものではありません。
