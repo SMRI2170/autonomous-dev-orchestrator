@@ -29,6 +29,99 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.tick(), "PUBLISHING")
         self.assertEqual(self.tick(), "REVIEW")
 
+
+    def setup_minimax_review(self, verdict="APPROVE", findings=None):
+        from unittest.mock import Mock
+        self.cfg["repositories"][0]["review_provider"] = "minimax"
+        self.engine.reviewer = Mock()
+        self.engine.reviewer.review.return_value = {
+            "verdict": verdict, "findings": findings if findings is not None else []}
+        return self.engine.reviewer
+
+    def test_minimax_review_approval_is_bound_to_current_sha(self):
+        reviewer = self.setup_minimax_review()
+        self.publish()
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(reviewer.review.call_count, 1)
+        record = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(record["minimax_review"]["sha"], self.gh.head)
+        self.assertEqual(record["minimax_review"]["verdict"], "APPROVE")
+        self.assertEqual(self.tick(), "AWAITING_HUMAN")
+        self.assertEqual(reviewer.review.call_count, 1)
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_minimax_review_findings_feed_normal_repair_loop(self):
+        reviewer = self.setup_minimax_review(
+            "REQUEST_CHANGES", [{"path": "docs/glossary.md", "severity": "major",
+                                 "message": "Glossary definition is wrong"}])
+        self.publish()
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.agent.calls, 2)
+        self.assertIn("Glossary definition is wrong", self.agent.inputs[1][0]["body"])
+        self.assertEqual(reviewer.review.call_count, 1)
+
+    def test_minimax_does_not_review_before_ci_passes(self):
+        reviewer = self.setup_minimax_review()
+        self.publish()
+        original = self.gh.evidence
+        def pending(repo, pr):
+            evidence = original(repo, pr)
+            evidence["checks"][0]["status"] = "in_progress"
+            return evidence
+        self.gh.evidence = pending
+        self.assertEqual(self.tick(), "REVIEW")
+        reviewer.review.assert_not_called()
+
+    def test_minimax_snapshot_failure_can_retry_before_model_call(self):
+        reviewer = self.setup_minimax_review()
+        self.publish()
+        original_snapshot = self.gh.snapshot
+        def fail_snapshot(*args):
+            raise Blocked("temporary GitHub snapshot failure")
+        self.gh.snapshot = fail_snapshot
+        self.assertEqual(self.tick(), "BLOCKED")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(data["resume"], "REVIEW")
+        reviewer.review.assert_not_called()
+        self.gh.snapshot = original_snapshot
+        self.store.retry(1)
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(reviewer.review.call_count, 1)
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_minimax_review_interruption_is_not_replayed(self):
+        reviewer = self.setup_minimax_review()
+        reviewer.review.side_effect = RuntimeError("interrupted")
+        self.publish()
+        self.assertEqual(self.tick(), "BLOCKED")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(data["resume"], "REVIEWING")
+        with self.assertRaises(Blocked):
+            self.store.retry(1)
+        self.assertEqual(reviewer.review.call_count, 1)
+
+    def test_minimax_never_automerges_even_if_enabled(self):
+        self.setup_minimax_review()
+        self.cfg["auto_merge"] = True
+        self.cfg["repositories"][0]["auto_merge"] = True
+        self.publish()
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "BLOCKED")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_missing_minimax_reviewer_fails_closed(self):
+        self.cfg["repositories"][0]["review_provider"] = "minimax"
+        self.publish()
+        self.assertEqual(self.tick(), "BLOCKED")
+        self.assertEqual(self.agent.calls, 1)
+
+    def test_dry_run_never_calls_minimax_reviewer(self):
+        reviewer = self.setup_minimax_review()
+        self.cfg["dry_run"] = True
+        self.assertTrue(self.engine.tick()["dry_run"])
+        reviewer.review.assert_not_called()
+
     def test_dry_run_has_no_agent_or_remote_write_or_live_claim(self):
         self.cfg["dry_run"] = True
         result = self.engine.tick()
@@ -192,4 +285,116 @@ class EngineTests(unittest.TestCase):
         self.gh.protected = False
         self.publish()
         self.assertEqual(self.tick(), "BLOCKED")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_allows_human_handoff_without_auto_merge(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.assertEqual(self.tick(), 'AWAITING_HUMAN')
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_behind_stays_in_review_even_after_approval(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable_state = "behind"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_handoff_behind_regression_blocks_with_manual_recovery(self):
+        self.publish()
+        self.assertEqual(self.tick(), "AWAITING_HUMAN")
+        self.gh.base = 'c' * 40
+        self.gh.mergeable_state = "behind"
+        self.assertEqual(self.tick(), "BLOCKED")
+        row = self.store.get("owner/project", 1)
+        data = json.loads(row["data"])
+        self.assertIn("Manual handoff invalidated", data["reason"])
+        self.assertEqual(self.agent.calls, 1)
+        self.assertEqual(self.gh.close_calls, 0)
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_handoff_conflict_regression_blocks_without_head_update(self):
+        self.publish()
+        self.assertEqual(self.tick(), "AWAITING_HUMAN")
+        self.gh.base = 'c' * 40
+        self.gh.mergeable = False
+        self.gh.mergeable_state = "dirty"
+        self.assertEqual(self.tick(), "BLOCKED")
+        self.assertEqual(self.gh.close_calls, 0)
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_handoff_transient_unknown_does_not_block(self):
+        self.publish()
+        self.assertEqual(self.tick(), "AWAITING_HUMAN")
+        self.gh.base = 'c' * 40
+        self.gh.mergeable = None
+        self.gh.mergeable_state = "unknown"
+        self.assertEqual(self.tick(), "AWAITING_HUMAN")
+        self.assertEqual(self.gh.close_calls, 0)
+
+    def test_behind_pr_never_hands_off_after_ci_and_approval(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable_state = "behind"
+        self.gh.review = "MISSING"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.gh.review = "PASS"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_not_clean_still_waits_for_ci_and_review(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable_state = "dirty"
+        self.gh.review = "MISSING"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.gh.review = "PASS"
+        self.gh.ci = "neutral"
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_conflicted_pr_must_not_handoff(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable = False
+        self.gh.mergeable_state = "dirty"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_dirty_state_with_true_mergeable_must_not_handoff(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable = True
+        self.gh.mergeable_state = "dirty"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_unknown_mergeability_must_not_handoff(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable = None
+        self.gh.mergeable_state = "unknown"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_base_movement_behind_without_approved_review_still_waits(self):
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.gh.mergeable_state = "behind"
+        self.gh.review = "MISSING"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.gh.merge_calls, 0)
+
+    def test_nonclean_without_base_movement_does_not_handoff(self):
+        self.publish()
+        self.gh.mergeable_state = "dirty"
+        self.assertEqual(self.tick(), "REVIEW")
+
+    def test_base_movement_blocks_auto_merge(self):
+        self.cfg['auto_merge'] = True
+        self.cfg['repositories'][0]['auto_merge'] = True
+        self.publish()
+        self.gh.base = 'c' * 40
+        self.assertEqual(self.tick(), 'BLOCKED')
         self.assertEqual(self.gh.merge_calls, 0)

@@ -71,7 +71,7 @@ class Store:
             raise Blocked("Repair budget exhausted; create a new, reviewed issue")
         phase = data.get("resume", "QUEUED")
         # Never replay an agent call after interruption; a human must inspect it.
-        if phase == "BUILDING":
-            raise Blocked("Interrupted model call: inspect artifacts and create a new issue")
+        if phase in ("BUILDING", "REVIEWING"):
+            raise Blocked("Interrupted model/review call: inspect artifacts and create a new issue")
         data.pop("reason", None)
         self.save(row, phase, data)

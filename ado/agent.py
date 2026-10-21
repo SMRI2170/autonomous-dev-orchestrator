@@ -2,9 +2,11 @@
 import json
 import os
 import platform
+import selectors
 import signal
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from .policy import Blocked, parse_changes
 
@@ -30,13 +32,13 @@ def profile(node, runtime_root, data_dir, temp):
     # JSON quoting is also valid Seatbelt string quoting; reject control chars upstream.
     q = lambda p: json.dumps(str(p))
     read = ["/System", "/usr", "/bin", "/Library", "/dev", "/private/etc", "/opt/homebrew", "/usr/local",
-            str(Path(node).parent), runtime_root, data_dir, temp]
+            str(Path(node).parent), runtime_root, data_dir, data_dir + ".lock", temp]
     return "\n".join([
         "(version 1)", "(deny default)", '(allow file-read* (literal "/"))',
         "(allow network-outbound)", "(allow file-read-metadata)", "(allow sysctl-read mach-lookup process-info*)",
         "(allow process-fork)", f"(allow process-exec (literal {q(node)}))",
         "(allow file-read* " + " ".join(f"(subpath {q(p)})" for p in read) + ")",
-        "(allow file-write* " + " ".join(f"(subpath {q(p)})" for p in [data_dir, temp]) + ")",
+        "(allow file-write* " + " ".join(f"(subpath {q(p)})" for p in [data_dir, data_dir + ".lock", temp]) + ")",
         '(allow file-write* (literal "/dev/null"))',
     ])
 
@@ -46,6 +48,10 @@ class MiniMax:
         self.config = config
 
     def generate(self, issue, files, repo_config, feedback):
+        return parse_changes(self.invoke(prompt(issue, files, repo_config, feedback)))
+
+    def invoke(self, instruction):
+        """Run a fresh tool-less, Seatbelt-confined CLI invocation. No shell or API fallback."""
         cfg = self.config
         if platform.system() != "Darwin":
             raise Blocked("Live MiniMax adapter requires macOS Seatbelt")
@@ -71,31 +77,85 @@ class MiniMax:
                    "MINIMAX_DATA_DIR": str(paths["data_dir"]), "MAVIS_DATA_DIR": str(paths["data_dir"]),
                    "NO_COLOR": "1", "TERM": "dumb"}
             cmd = ["/usr/bin/sandbox-exec", "-f", str(sb), str(paths["node"]), str(paths["entry"]),
-                   "exec", "--mode", "lightweight", "--input", "-", "--output-format", "json"]
-            # File-backed output avoids unbounded memory growth. rlimit caps per-file output.
-            with open(Path(temp) / "stdout", "w+") as out, open(Path(temp) / "stderr", "w+") as err:
-                import resource
-                def limits():
-                    resource.setrlimit(resource.RLIMIT_FSIZE, (2_000_000, 2_000_000))
-                proc = subprocess.Popen(cmd, cwd=temp, env=env, stdin=subprocess.PIPE,
-                                        stdout=out, stderr=err, text=True, start_new_session=True,
-                                        preexec_fn=limits)
+                   "exec", "--mode", "lightweight", "--max-steps", "1", "--input", "-", "--output-format", "json"]
+            # Pipe output is drained with selectors: the combined 2MB budget
+            # is enforced on read, independent of the 64MB CLI database limit.
+            import resource
+            def limits():
+                resource.setrlimit(resource.RLIMIT_FSIZE, (64_000_000, 64_000_000))
+            proc = subprocess.Popen(cmd, cwd=temp, env=env, stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    start_new_session=True, preexec_fn=limits)
+            try:
+                deadline = time.monotonic() + cfg.get("timeout_seconds", 600)
+                payload = instruction.encode("utf-8")
+                offset, total = 0, 0
+                stdout_chunks = []
+                with selectors.DefaultSelector() as selector:
+                    for stream, label in ((proc.stdout, "stdout"), (proc.stderr, "stderr")):
+                        selector.register(stream, selectors.EVENT_READ, label)
+                    os.set_blocking(proc.stdin.fileno(), False)
+                    selector.register(proc.stdin, selectors.EVENT_WRITE, "stdin")
+                    # Descendants can inherit the pipes and keep them open after
+                    # the CLI exits. Drain briefly, then kill the process group.
+                    exited_at = None
+                    while selector.get_map():
+                        now = time.monotonic()
+                        remaining = deadline - now
+                        if remaining <= 0:
+                            raise Blocked("MiniMax execution deadline exceeded")
+                        if proc.poll() is not None:
+                            exited_at = exited_at or now
+                            if now - exited_at >= 1.0:
+                                break
+                        for key, _ in selector.select(timeout=min(0.25, remaining)):
+                            stream, label = key.fileobj, key.data
+                            if label == "stdin":
+                                try:
+                                    written = os.write(stream.fileno(), payload[offset:offset + 8192])
+                                except BlockingIOError:
+                                    continue
+                                except BrokenPipeError:
+                                    written = 0
+                                    offset = len(payload)
+                                offset += written
+                                if offset >= len(payload):
+                                    selector.unregister(stream)
+                                    stream.close()
+                            else:
+                                chunk = os.read(stream.fileno(), min(65536, 2_000_001 - total))
+                                if not chunk:
+                                    selector.unregister(stream)
+                                    stream.close()
+                                    continue
+                                total += len(chunk)
+                                if total > 2_000_000:
+                                    raise Blocked("MiniMax output budget exceeded")
+                                if label == "stdout":
+                                    stdout_chunks.append(chunk)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise Blocked("MiniMax execution deadline exceeded")
                 try:
-                    proc.communicate(prompt(issue, files, repo_config, feedback), timeout=cfg.get("timeout_seconds", 600))
-                finally:
-                    # Also terminate any surviving runtime children after a normal exit.
-                    try:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    proc.wait()
+                    proc.wait(timeout=remaining)
+                except subprocess.TimeoutExpired as exc:
+                    raise Blocked("MiniMax execution deadline exceeded") from exc
                 if proc.returncode:
                     raise Blocked("MiniMax failed or sandbox denied access; verify CLI contract/login")
-                out.seek(0)
                 try:
-                    envelope = json.load(out)
+                    envelope = json.loads(b"".join(stdout_chunks).decode("utf-8"))
                     if envelope["status"] != "succeeded" or not isinstance(envelope["output"], str):
                         raise ValueError("Invalid envelope")
-                    return parse_changes(envelope["output"])
+                    return envelope["output"]
                 except (KeyError, ValueError, TypeError) as exc:
                     raise Blocked("Unsupported MiniMax output; no permissive fallback") from exc
+            finally:
+                # Also terminate surviving descendants after a normal exit.
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait()
+                for stream in (proc.stdin, proc.stdout, proc.stderr):
+                    if not stream.closed:
+                        stream.close()

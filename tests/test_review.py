@@ -11,6 +11,32 @@ class ReviewTests(unittest.TestCase):
         self.ev = self.gh.evidence("owner/project", self.pr)
         self.cfg = repo_config()
 
+
+    def test_minimax_approval_requires_current_head_and_diff(self):
+        self.cfg["review_provider"] = "minimax"
+        review = {"sha": "head", "changes_digest": "bound", "verdict": "APPROVE", "findings": []}
+        self.assertEqual(judge(self.pr, self.ev, self.cfg, review, "bound")[0], "PASS")
+        self.assertEqual(judge(self.pr, self.ev, self.cfg, review, "different")[0], "WAIT")
+        self.assertEqual(judge(self.pr, self.ev, self.cfg, {**review, "sha": "stale"}, "bound")[0], "WAIT")
+        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "WAIT")
+
+    def test_minimax_review_optional_coderabbit_does_not_veto(self):
+        self.cfg["review_provider"] = "minimax"
+        self.ev["reviews"][0]["state"] = "CHANGES_REQUESTED"
+        self.ev["reviews"][0]["commit_id"] = "stale"
+        review = {"sha": "head", "changes_digest": "bound", "verdict": "APPROVE", "findings": []}
+        self.assertEqual(judge(self.pr, self.ev, self.cfg, review, "bound")[0], "PASS")
+        self.ev["reviews"].append({"id": 2, "user": {"login": "human", "type": "User"},
+                                   "commit_id": "stale", "state": "CHANGES_REQUESTED", "body": "unsafe"})
+        self.assertEqual(judge(self.pr, self.ev, self.cfg, review, "bound")[0], "WAIT")
+
+    def test_minimax_rejection_requires_actionable_findings(self):
+        self.cfg["review_provider"] = "minimax"
+        bad = {"sha": "head", "changes_digest": "bound", "verdict": "REQUEST_CHANGES", "findings": []}
+        self.assertEqual(judge(self.pr, self.ev, self.cfg, bad, "bound")[0], "WAIT")
+        good = {**bad, "findings": [{"path": "docs/a.md", "message": "incorrect", "severity": "major"}]}
+        self.assertEqual(judge(self.pr, self.ev, self.cfg, good, "bound")[0], "REPAIR")
+
     def test_valid_evidence_passes(self):
         self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "PASS")
 

@@ -53,6 +53,8 @@ class GitHub:
         self.bot_sha = None
         self.protected = True
         self.ci = "success"
+        self.mergeable_state = "clean"
+        self.mergeable = True
         self.extra_files = []
 
     def metadata(self, repo):
@@ -94,7 +96,7 @@ class GitHub:
         return {"number": number, "head": {"sha": self.head, "ref": "ado/issue-1", "repo": {"full_name": repo}},
                 "base": {"sha": self.base, "ref": "main", "repo": {"full_name": repo}},
                 "merged": self.merged, "state": "closed" if self.closed_pr or self.merged else "open",
-                "draft": False, "mergeable": True, "mergeable_state": "clean"}
+                "draft": False, "mergeable": self.mergeable, "mergeable_state": self.mergeable_state}
 
     def evidence(self, repo, pr):
         bot = {"id": 1, "user": {"login": "coderabbitai[bot]", "type": "Bot"},
