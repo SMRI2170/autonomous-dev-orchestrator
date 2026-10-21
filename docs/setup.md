@@ -4,7 +4,7 @@
 
 - Mac mini M2 16GB、macOS、Python 3.11以上、GitHub CLI。Intel/macOSやLinuxでのライブAI実行は対象外。
 - MiniMax Codeの既存契約・利用枠。Codexは必要時の手動補助のみ。
-- 対象は公開GitHubリポジトリ。標準ホストRunnerを使うCIと、CodeRabbit GitHub Appを事前に接続する。
+- 対象は公開GitHubリポジトリで、標準ホストRunnerを使うCIを用意する。CodeRabbit GitHub Appの接続は`review_provider = "coderabbit"`の場合のみ必須。MiniMaxレビューでは不要。
 - 専用のmacOS一般ユーザーで運用することを推奨。対象コードの実行環境と認証を分ける。
 
 このリポジトリは既存プロジェクトへファイルを配布・変更しません。以下の対象側の作業は運用者がレビューして手動実施します。
@@ -25,19 +25,20 @@ Mac標準のPython 3.9では動きません。プロジェクトで管理したP
 | Contents | Read/Write | git objects、専用ブランチ、マージ |
 | Issues | Read/Write | Issue取得・完了 |
 | Pull requests | Read/Write | PR作成、レビューとスレッドの読取り、マージ |
-| Checks | Read | check-runsの取得 |
+| Checks | Read、選択できる場合 | check-runsの取得。公開リソースの読取りはこの権限なしでも利用できるため、UIに項目がなければ取得を実測して確認 |
 | Administration | Read、任意 | 自動マージ時の保護ブランチ読取りのみ |
 
 Actions Write、Workflows Write、Projects Write、organization全体の権限、管理書込みは不要です。ルールのバイパス権限を付けないでください。Branch protectionを設定する操作はこのツールに実装していません。Contents WriteはGitHub側では専用ブランチだけに限定できないため、default branchを保護してください。
 
-一時的な手動実行ではシェルの非表示入力等でGH_TOKENを渡し、終了後に解除します。トークンを設定TOML、コマンドの履歴、plist、リポジトリに書かないでください。常駐用は[Keychainの手順](launchd.md)を利用します。
+一時的な手動実行ではシェルの非表示入力等でGH_TOKENを渡し、終了後に解除します。トークンを設定TOML、コマンドの履歴、plist、リポジトリに書かないでください。常駐用は[Keychainの手順](launchd.md)を利用します。macOSでは`python scripts/setup_token.py --config config.toml`で非表示入力し、`github_login`（任意）と設定に登録した全repoの存在・公開状態を確認してログインKeychainへ保存できます。リポジトリのPAT選択範囲とContents/Issues/PRの書込み権限は読み取りAPIでは証明できないため、GitHubの権限設定UIで確認し、制御したpilotで実測します。既存のADO項目は上書きしません。新規保存後の読戻しに失敗した場合は、その項目をロールバックします。トークンを引数に渡さず、Keychain操作のstdinで受け渡します。
 
 ## 3. 対象リポジトリの準備（手動）
 
 1. opt-inラベル`ado:ready`を作成する。自動マージを将来検討する場合だけ`ado:low-risk`も用意する。
 2. `trusted_authors`をIssue作成者の明示的な許可リストにする。公開の第三者Issueは実行しない。
 3. 既存CIを利用し、PRで必ず走る標準ホストRunnerのcheck名を確認する。Python用・Flutter用の再利用workflowとcaller例をexamplesに用意している。Flutterは対象に合うSDKの正確なバージョンを入力する。`required_checks`に**APIが返す正確なname**と`app = "github-actions"`を設定する。再利用workflowでは表示名が`checks / unit`等になる場合があるため、`unit`と決め打ちしない。
-4. CodeRabbitを[公開リポジトリ向け無料プラン](https://www.coderabbit.ai/pricing)で接続する。従量課金の追加レビューはOffにし、課金機能は有効化しない。bot loginは実アカウントのAPI結果と照合する。
+4. 標準の`review_provider = "coderabbit"`ならCodeRabbitを[公開リポジトリ向け無料プラン](https://www.coderabbit.ai/pricing)で接続する。従量課金の追加レビューはOffにし、課金機能は有効化しない。bot loginは実アカウントのAPI結果と照合する。正式なAPPROVEDを返すため、`examples/coderabbit.yaml`の`reviews.request_changes_workflow = true`相当の設定を対象repoに手動導入する。作者自身の承認コマンドは`allow_author_approval: false`で無効にする。既定のCOMMENTEDだけではworkerは合格にしない。
+   既存契約のMiniMaxをレビュー主体にする場合は、対象リポジトリに`review_provider = "minimax"`を設定する。CI成功・PRのhead一致・変更ファイルのSHA検証後だけ、ツールなしの新規MiniMax CLI実行でレビューし、判定と差分ダイジェストをSQLiteに保存する。実装とレビューは別呼び出しだが同じ基盤モデルであり、独立モデルによる承認とは異なる。CodeRabbitは任意。MiniMax方式では自動マージを実施しない。レビュー呼び出し中に終了したジョブは自動再実行不可。既存の進行中ジョブに対してレビュー方式を変更すると、policy hash検査によりBlockedとなるので、新しいIssueから移行すること。
 5. `examples/issue.md`を参考に、`## Acceptance criteria`を含む小さなIssueを作る。依存がなければ`Depends-On`行を削除。依存Issueは同一リポジトリ内で`completed`として閉じられている必要がある。
 6. `ado run --once`で読み取りだけの計画を確認する。
 
@@ -46,8 +47,6 @@ CIはtrusted設定です。既存workflowが有料Runner・他の有料サービ
 ## 4. MiniMax Codeを既存契約で用意
 
 [公式インストール手順](https://github.com/MiniMax-AI/minimax-code#quick-start)でバージョンを固定して導入し、専用プロファイルを作成します。自動インストールやAPIキー発行は行いません。
-
-`--mode lightweight`に対応する版を使用してください。ローカル確認では0.6.3は非対応、0.6.9はsandbox内の`exec --help`が成功しています。`ado doctor`の`minimax_runtime.compatible`で、設定パスとCLIの対応を確認できます。この診断はモデルを呼び出さず、認証成功を保証しません。npm配布版のentryは、インストール先の`node_modules/@minimax-ai/code/cli.js`です。`runtime_root`には、その依存パッケージを含む専用インストール先を指定してください。
 
 ```sh
 MINIMAX_DATA_DIR=/absolute/path/to/ado-minimax-profile mcode login --region global
@@ -60,7 +59,7 @@ Globalでないアカウントは公式の該当地域用ログインを使い�
 
 | 導入方法 | `entry` | `runtime_root` |
 |---|---|---|
-| npm配布版 | `<インストール先>/node_modules/@minimax-ai/code/cli.js` | `<インストール先>/node_modules/@minimax-ai`を含む専用ディレクトリ |
+| npm配布版（0.6.12で確認） | `<インストール先>/node_modules/@minimax-ai/code/cli.js` | `<インストール先>/node_modules/@minimax-ai`を含む専用ディレクトリ |
 | ソースビルド | `<ビルド先>/dist/cli.js` | `<ビルド先>` |
 
 `runtime_paths()`は`entry`が`runtime_root`配下の`.js`であることを要求します。npm版でもソース版でも、この2つの対応がずれると`ado doctor`が`Entry must be a reviewed .js file under runtime_root`で失敗します。シェルの`mcode`ランチャーは直接起動しません。ランチャー経由の任意コマンドや別CLIへのフォールバックは拒否します。
@@ -68,18 +67,43 @@ Globalでないアカウントは公式の該当地域用ログインを使い�
 アダプターのコマンド契約:
 
 ```text
-node <runtime_root配下のentry> exec --mode lightweight --input - --output-format json
+node <runtime_root配下のentry> exec --mode lightweight --max-steps 1 --input - --output-format json
 ```
+
+npm配布版0.6.12ではentryは`node_modules/@minimax-ai/code/cli.js`です。CLIはバージョンを固定し、既存インストールとは別の専用ディレクトリに置いてください。`mcode provider use token-plan`で既存契約の認証元を明示します。
 
 stdinで指示と許可済みファイルのスナップショットを渡します。標準出力は`{"status":"succeeded","output":"…"}`、outputはさらに`{"files":{"docs/example.md":"全文"}}`というJSON文字列である必要があります。Markdownフェンス、追加キー、重複キー、空変更は不合格。ファイル削除、rename、バイナリ、実行権限変更は未対応です。
 
 [公式のlightweightモード](https://github.com/MiniMax-AI/minimax-code#lightweight-conversations)はtoolsを渡さず、workspace instructions・Skills・memoryを省きます。本ツールはさらにOS側で実行とファイルアクセスを制限します。既存のCLI設定・hook・認証データの信頼性は専用プロファイル側で管理してください。CLI自身のセッション記録は本ツールのログマスキング対象外です。
 
-この契約を利用バージョンで小さなタスクにより確認し、`subscription_confirmed = true`にします。認証更新のためのネットワークと専用data dirの読み書きは許可されます。起動に不足するOSアクセスがあると失敗しBlockedになります。HOME全体の許可やsandbox無効化で回避しないでください。
-
 0.6.9の実機確認では、新規profileの既定モデル`MiniMax-M3.1-Flash-Preview`が既存契約のモデル一覧に存在せず失敗しました。専用profileの`config.yaml`で、実際に利用可能なモデルを選択してください。この環境では既存profileと同じ`defaultModel: minimax/MiniMax-M3`で生成に成功しました。APIキーや別providerへの切替は不要です。
 
-## 5. ライブ実行（自動マージは無効のまま）
+この契約を利用バージョンで小さなタスクにより確認し、`subscription_confirmed = true`にします。認証更新のためのネットワークと専用data dirの読み書きは許可されます。起動に不足するOSアクセスがあると失敗しBlockedになります。HOME全体の許可やsandbox無効化で回避しないでください。
+
+## 5. MiniMaxレビューの単発受入テスト（GitHub書込みなし）
+
+Macで最新版をpullし、`python -m unittest discover -s tests -v`がすべて通ってから実行してください。これにより既存MiniMax契約で本物のレビューCLI応答を一度検証します（モデルの利用枠を消費します）。本番用のIssue・PR・GitHub APIは呼びません。
+
+```sh
+.venv/bin/python - <<'PY'
+from ado.config import load
+from ado.agent import MiniMax
+from ado.minimax_review import MiniMaxReviewer
+
+cfg = load("config.toml")
+result = MiniMaxReviewer(MiniMax(cfg["minimax"])).review(
+    {"title": "Explain PR", "body": "## Acceptance criteria\nExplain what PR means."},
+    {"docs/example.md": "PR means private repository."},
+    {"docs/example.md": "PR means pull request."},
+    "a" * 40,
+)
+print("MiniMax reviewer:", result["verdict"], "findings:", len(result["findings"]))
+PY
+```
+
+`APPROVE`または`REQUEST_CHANGES`のどちらも正常な構造化応答です。CLI起動・ログイン・モデル契約のエラーは安全停止します。トークン・プロファイル内容は共有しないでください。現在の`config.toml`に`review_provider`が未指定なら、旧CodeRabbit方式が維持されます。レビュー方式変更時は進行中ジョブの扱いを確認し、先に手動で整理してください。
+
+## 6. ライブ実行（自動マージは無効のまま）
 
 `dry_run = false`のみ変更します。`auto_merge = false`は維持します。1つの小さなdocs Issueで開始してください。
 
@@ -92,15 +116,15 @@ stdinで指示と許可済みファイルのスナップショットを渡しま
 
 `run --once`を複数回実行すると、変更生成→PR公開→レビュー確認と進みます。PR本文の編集・コメントはworkerの設定変更やマージ許可には使われません。PRに`Closes #…`を付けず、workerがマージ済みを確認してからIssueを完了します。
 
-## 6. 停止・復旧
+## 7. 停止・復旧
 
-Ctrl-Cまたはlaunchd停止でポーリングを止めます。BUILDING中断は予算を消費済みとして保存し、自動リプレイしません。Blockedの原因を確認し、再開可能なAPI送信段階のみ明示して復旧できます。
+Ctrl-Cまたはlaunchd停止でポーリングを止めます。BUILDING中断は予算を消費済みとして保存し、自動リプレイしません。Blockedの原因を確認し、再開可能なAPI送信段階のみ明示して復旧できます。人間への引き継ぎ後にPRが `behind` / `dirty` へ変化した場合は、安全のためジョブをBlockedにします。headの更新は保存済みSHAの保証を無効化するため、このジョブを再開せず、PRの更新・マージ・Issueのクローズを人間が確認して行ってください。
 
 ```sh
 .venv/bin/python -m ado --config config.toml retry 1
 ```
 
-この操作は修正回数をリセットしません。BUILDING中断と3回の修正上限到達は再開不可です。人間がPRを確認・閉鎖するなど整理し、新しいIssueで依頼してください。期限切れの既存reviewを再試行しても期限は延長しません。レビュー待ち開始時刻は新しい修正commitの公開時だけ更新します。
+この操作は修正回数をリセットしません。BUILDING/REVIEWING中断と3回の修正上限到達は再開不可です。人間がPRを確認・閉鎖するなど整理し、新しいIssueで依頼してください。期限切れの既存reviewを再試行しても期限は延長しません。レビュー待ち開始時刻は新しい修正commitの公開時だけ更新します。
 
 publishのHTTP結果が失われた場合、保存した親SHA・内容・日時で同じcommitを作り、既存refとPRを照合します。別のプロセスが作ったブランチやPRと衝突するとBlockedです。`.state`やSQLiteを削除して再実行する運用は冪等性を失うため避けてください。
 

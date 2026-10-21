@@ -8,6 +8,8 @@ from .policy import Blocked
 def load(path):
     with open(path, "rb") as file:
         config = tomllib.load(file)
+    if "github_login" in config and (not isinstance(config["github_login"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", config["github_login"])):
+        raise Blocked("Invalid github_login")
     config.setdefault("dry_run", True)
     config.setdefault("auto_merge", False)
     config.setdefault("state_dir", "~/.local/state/ado")
@@ -34,6 +36,10 @@ def load(path):
         repo.setdefault("issue_label", "ado:ready")
         repo.setdefault("required_checks", [{"name": "unit", "app": "github-actions"}])
         repo.setdefault("coderabbit_login", "coderabbitai[bot]")
+        # Do not mutate legacy configs merely to apply the default: active jobs
+        # persist a hash of repo config and must not be invalidated by an upgrade.
+        if repo.get("review_provider", "coderabbit") not in ("coderabbit", "minimax"):
+            raise Blocked("review_provider must be coderabbit or minimax")
         if not repo["required_checks"]:
             raise Blocked("At least one CI check is required")
         for check in repo["required_checks"]:

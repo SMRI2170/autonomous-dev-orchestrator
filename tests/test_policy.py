@@ -57,13 +57,48 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(Blocked):
             dependencies("Depends-On: https://evil.example/issue/12")
 
+
+    def test_review_provider_default_does_not_change_legacy_policy_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text('''[[repositories]]
+name = "owner/project"
+allowed_paths = ["docs/**/*.md"]
+trusted_authors = ["owner"]
+''')
+            repo = load(path)["repositories"][0]
+            self.assertNotIn("review_provider", repo)
+
+    def test_review_provider_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text('''[[repositories]]
+name = "owner/project"
+allowed_paths = ["docs/**/*.md"]
+trusted_authors = ["owner"]
+review_provider = "minimax"
+''')
+            self.assertEqual(load(path)["repositories"][0]["review_provider"], "minimax")
+            path.write_text(path.read_text().replace('review_provider = "minimax"', 'review_provider = "free-form"'))
+            with self.assertRaises(Blocked):
+                load(path)
+
     def test_config_safe_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"
             path.write_text('repositories = []\n')
             self.assertTrue(load(path)["dry_run"])
             self.assertFalse(load(path)["auto_merge"])
-            for value in ['max_repairs = 4', 'dry_run = "false"', 'poll_seconds = 0']:
+            for value in ['max_repairs = 4', 'dry_run = "false"', 'poll_seconds = 0', 'github_login = 123']:
                 path.write_text(value)
                 with self.assertRaises(Blocked):
                     load(path)
+
+    def test_distributed_example_config_loads_with_safe_defaults(self):
+        from pathlib import Path
+        path=Path(__file__).resolve().parents[1]/'examples/config.toml'
+        cfg=load(path)
+        self.assertTrue(cfg['dry_run'])
+        self.assertFalse(cfg['auto_merge'])
+        self.assertTrue(cfg['repositories'])
+        self.assertFalse(cfg['minimax']['subscription_confirmed'])

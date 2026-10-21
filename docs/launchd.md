@@ -1,10 +1,10 @@
 # macOS launchd常駐
 
-ログインユーザーのLaunchAgentで動かします。root常駐や公開self-hosted Actions Runnerは使用しません。Macのスリープ中・ログアウト中は処理されません。24時間動かす場合はmacOS設定で電源接続時の自動スリープを調整してください。常駐の導入・起動は本MVP作成時には実行していません。
+ログインユーザーのLaunchAgentで動かします。root常駐や公開self-hosted Actions Runnerは使用しません。Macのスリープ中・ログアウト中は処理されません。24時間動かす場合はmacOS設定で電源接続時の自動スリープを調整してください。初期作成時は未登録でした。2026-10-18にDeveloper配下の導入では、dry-runに限って登録・起動を確認しています。
 
 ## 1. 起動前チェック
 
-venvとconfig.tomlを絶対パスで固定し、`doctor`、テスト、dry-runを完了します。ライブ化はセットアップ手順の後で行います。Keychain Accessで一般パスワード項目を作成し、サービス名`ado.github-token`、アカウント`ado`に対象限定fine-grained PATを保存します。トークンの値をplistや環境設定へ記載しません。
+venvとconfig.tomlを絶対パスで固定し、`doctor`、テスト、dry-runを完了します。ライブ化はセットアップ手順の後で行います。Keychain Accessで一般パスワード項目を作成し、サービス名`ado.github-token`、アカウント`ado`に対象限定fine-grained PATを保存します。トークンの値をplistや環境設定へ記載しません。手動登録の代わりに`python scripts/setup_token.py`を実行すると、非表示入力・対象アカウント確認・既存項目の保護・読戻し確認を行えます。
 
 `dry_run = true`ではKeychainを読みません。ライブ時だけ`scripts/launch.py`が`security find-generic-password`で取得してworkerに渡します。最初のKeychainアクセス確認・ロック解除は対話環境で行ってください。取得できなければ起動を止めます。
 

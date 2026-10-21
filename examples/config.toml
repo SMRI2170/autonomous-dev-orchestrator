@@ -1,34 +1,43 @@
-# Copy to config.toml and review the repository settings before use.
+# Copy to config.toml (ignored by git). No token or secret belongs in this file.
+github_login = "SMRI2170" # Optional expected account; change for your deployment.
 dry_run = true
 auto_merge = false
 state_dir = "~/.local/state/ado"
 poll_seconds = 60
-review_timeout_seconds = 86400
 max_repairs = 3
+review_timeout_seconds = 86400
 
 [minimax]
-# Replace these absolute paths with your reviewed installation and dedicated profile.
-# Confirm the existing subscription and CLI contract before enabling this flag.
+# Remains false until you verify /status and /provider use your existing plan.
 subscription_confirmed = false
+# Use actual absolute paths from your own reviewed installation. No launcher shell.
 node = "/opt/homebrew/bin/node"
-# npm配布版: .../node_modules/@minimax-ai/code/cli.js (runtime_root=.../node_modules/@minimax-ai)
-# ソースビルド: .../minimax-code/dist/cli.js (runtime_root=.../minimax-code)
+# Match the pair to how MiniMax Code was installed, or `ado doctor` rejects it:
+#   npm package:  entry=.../node_modules/@minimax-ai/code/cli.js  runtime_root=.../node_modules/@minimax-ai
+#   source build: entry=.../minimax-code/dist/cli.js             runtime_root=.../minimax-code
 entry = "/absolute/path/to/minimax-code/dist/cli.js"
 runtime_root = "/absolute/path/to/minimax-code"
+# Dedicated profile, not your main HOME or a GitHub credential directory.
 data_dir = "/absolute/path/to/ado-minimax-profile"
 timeout_seconds = 600
 
 [[repositories]]
-# Reference only: copying this file does not modify the target repository.
 name = "SMRI2170/animal-shadow-match"
 trusted_authors = ["SMRI2170"]
 issue_label = "ado:ready"
-allowed_paths = ["docs/**/*.md"]
+allowed_paths = ["docs/**/*.md", "lib/**/*.dart", "test/**/*.dart"]
+# Explicit context files are still subject to protected path/secret/command checks.
 context_paths = ["README.md"]
-# Replace with the exact check name returned by the target repository's CI.
-required_checks = [{ name = "unit", app = "github-actions" }]
+max_files = 5
+max_context_bytes = 150000
+max_change_bytes = 50000
+required_checks = [{name = "unit", app = "github-actions"}]
+# "minimax" runs a fresh tool-less local review with your existing subscription,
+# and ALWAYS requires human merging. Set "coderabbit" for the legacy bot gate.
+review_provider = "minimax"
 coderabbit_login = "coderabbitai[bot]"
 auto_merge = false
 auto_merge_paths = ["docs/**/*.md"]
-max_files = 5
-max_change_bytes = 50000
+
+# Register a second PUBLIC repository by adding another [[repositories]] table.
+# Do not register private repositories: this MVP rejects them to avoid paid CI usage.

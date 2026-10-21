@@ -4,6 +4,7 @@ import os
 import sys
 import time
 from .agent import MiniMax
+from .minimax_review import MiniMaxReviewer
 from .config import load
 from .engine import Engine
 from .github import GitHub
@@ -35,7 +36,10 @@ def main():
         if args.command == "status":
             print(json.dumps([{"job": r["id"], "repo": r["repo"], "issue": r["issue"], "state": r["state"],
                                "repairs": json.loads(r["data"]).get("repairs", 0),
-                               "reason": json.loads(r["data"]).get("reason")}
+                               "reason": json.loads(r["data"]).get("reason"),
+                               "review_verdict": (json.loads(r["data"]).get("minimax_review") or {}).get("verdict"),
+                               "review_sha": (json.loads(r["data"]).get("minimax_review") or {}).get("sha"),
+                               "review_findings": len((json.loads(r["data"]).get("minimax_review") or {}).get("findings", []))}
                               for r in store.rows()], ensure_ascii=False, indent=2))
         elif args.command == "retry":
             with store.lock():
@@ -48,10 +52,13 @@ def main():
                               "auto_merge": cfg["auto_merge"], "repository_count": len(cfg["repositories"]),
                               "explicit_github_token": bool(os.environ.get("GH_TOKEN")),
                               "subscription_confirmed": cfg.get("minimax", {}).get("subscription_confirmed", False),
-                              "minimax_runtime": MiniMax(cfg.get("minimax", {})).runtime_status(),
+"minimax_runtime": MiniMax(cfg.get("minimax", {})).runtime_status(),
+                              "review_providers": {r["name"]: r.get("review_provider", "coderabbit")
+                                                   for r in cfg["repositories"]},
                               "projects_write_supported": False, "codex_automatic_supported": False}, indent=2))
         else:
-            engine = Engine(cfg, store, GitHub(cfg["dry_run"]), MiniMax(cfg.get("minimax", {})))
+            model = MiniMax(cfg.get("minimax", {}))
+            engine = Engine(cfg, store, GitHub(cfg["dry_run"]), model, MiniMaxReviewer(model))
             with store.heartbeat():
                 while True:
                     print(redact(json.dumps(engine.tick(), ensure_ascii=False)), flush=True)
