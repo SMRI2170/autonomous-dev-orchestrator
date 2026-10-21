@@ -131,14 +131,37 @@ class DashboardTests(unittest.TestCase):
             store.db.close()
 
     def test_idle_polling_keeps_the_worker_looking_alive(self):
+        """Liveness must be refreshed while waiting, not only when idle() returns.
+
+        Asserting once after the wait passes even if the heartbeat happens on the
+        final step, so a watcher samples the file throughout the wait and the
+        claim is checked against samples taken well before it ends.
+        """
         store = Store(self.cfg['state_dir'])
         try:
             with store.heartbeat():
-                before = json.loads((store.root / 'worker.json').read_text())['time']
-                store.idle(0.2, interval=0.05)
-                after = json.loads((store.root / 'worker.json').read_text())['time']
-                # Waiting between polls must refresh liveness, not leave it going stale.
-                self.assertGreater(after, before)
+                start = json.loads((store.root / 'worker.json').read_text())['time']
+                samples, stop = [], threading.Event()
+
+                def watch():
+                    while not stop.is_set():
+                        try:
+                            samples.append((time.monotonic(),
+                                            json.loads((store.root / 'worker.json').read_text())['time']))
+                        except (OSError, ValueError):
+                            pass
+                        time.sleep(0.02)
+
+                watcher = threading.Thread(target=watch, daemon=True)
+                watcher.start()
+                try:
+                    store.idle(0.6, interval=0.1)
+                finally:
+                    ended = time.monotonic()
+                    stop.set()
+                    watcher.join()
+                early = [stamp for moment, stamp in samples if moment < ended - 0.25]
+                self.assertGreater(max(early), start + 0.05)
                 self.assertEqual(snapshot(self.cfg)['worker']['status'], 'online')
         finally:
             store.db.close()
