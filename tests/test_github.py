@@ -20,14 +20,18 @@ class GitHubTests(unittest.TestCase):
             GitHub(False)
 
     def test_transport_does_not_leak_failure_body(self):
-        # The failure text is built from the method and the endpoint only, so neither the
-        # query string nor anything `gh` wrote can reach it. Without this seam the test
-        # would shell out to the real `gh` and pass without asserting anything.
-        failure = Blocked("GitHub request failed: GET repos/owner/project")
-        with patch("ado.github.run", side_effect=failure), self.assertRaises(Blocked) as caught:
-            GitHub().api("repos/owner/project?per_page=100")
+        # A real failing `gh`, not a mock: the message is what api() actually builds, so
+        # this fails if the failure text ever grows a query string or the CLI's stderr.
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "gh"
+            fake.write_text("#!/bin/sh\necho SECRET_PRIVATE_RESPONSE >&2\nexit 1\n")
+            fake.chmod(0o755)
+            with patch.dict(os.environ, {"PATH": tmp + os.pathsep + os.environ["PATH"]}):
+                with self.assertRaises(Blocked) as caught:
+                    GitHub().api("repos/owner/project?per_page=100")
         self.assertEqual(str(caught.exception), "GitHub request failed: GET repos/owner/project")
         self.assertNotIn("SECRET_PRIVATE_RESPONSE", str(caught.exception))
+        self.assertNotIn("per_page", str(caught.exception))
 
     def test_slow_request_keeps_the_worker_looking_alive(self):
         # Regression for #9: a request outliving the dashboard's 15 second online window

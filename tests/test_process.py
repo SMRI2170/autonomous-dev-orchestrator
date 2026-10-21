@@ -1,12 +1,31 @@
+import os
+import subprocess
 import sys
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from ado.policy import Blocked
 from ado.process import run
 
 
 def script(body):
     return [sys.executable, "-c", body]
+
+
+def alive(pid):
+    """True while the process still exists and is not an unreaped zombie.
+
+    A killed descendant is reparented to init, which may take a moment to reap it;
+    a zombie holds a pid but is not running, so it does not count as surviving.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    state = subprocess.run(["ps", "-o", "state=", "-p", str(pid)],
+                           capture_output=True, text=True).stdout.strip()
+    return not state.startswith("Z")
 
 
 class ProcessTests(unittest.TestCase):
@@ -39,12 +58,22 @@ class ProcessTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 10)
 
     def test_descendants_do_not_outlive_the_call(self):
-        # A child that inherits the pipes would keep the call open; the runner stops it.
-        command = script("import subprocess, sys, time\n"
-                         "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
-                         "time.sleep(30)\n")
-        with self.assertRaises(Blocked):
-            run(command, 0.5, label="probe")
+        # The CLI can exit while a child it spawned still holds the pipes open; the
+        # group kill is the only thing that ends that child. Assert on the pid rather
+        # than on the call returning -- with a parent that outlives its child, checking
+        # the return value would pass even with no killpg at all.
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = Path(tmp) / "pid"
+            command = script("import subprocess, sys\n"
+                             f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
+                             f"open({str(pidfile)!r}, 'w').write(str(p.pid))\n")
+            run(command, 10, label="probe")
+            child = int(pidfile.read_text())
+            for _ in range(60):
+                if not alive(child):
+                    return
+                time.sleep(0.05)
+            self.fail(f"Descendant {child} survived the process-group kill")
 
     def test_payload_is_written_to_stdin(self):
         stdout, _ = run(script("import sys; sys.stdout.write(sys.stdin.read().upper())"),

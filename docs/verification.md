@@ -42,7 +42,7 @@
 
 - ブラウザによるキーボード操作とフォーカス復帰の実操作確認は未実施です。JSにはCIの自動テストがなく、PythonのテストはマーカーとHTTP応答までを確認します。
 - 上記helper`drain()`は`selectors.DefaultSelector`でstdin/stdout/stderrを同一スレッドがまとめて読み書きし、期限超過と合計出力上限の超過を検出します。プロセス群へのSIGKILLと回収は`drain()`ではなく、それを呼び出す`doctor`と`generate`の各`finally`が行います。readerスレッドは存在しないため、旧形式のように停止シグナルが届かない経路はありません。以前の実装（readerスレッドがSIGKILLを送り主スレッドの`finally`が回収を担保する形式）では15秒タイムアウトが1回だけ観測されましたが、現行形式では10回連続で再現せず、原因は特定できていません。旧形式での初回観測の記録であり、現行実装の不具合としては再現していません。
-- 上記のlivenessはMiniMaxの呼出しのみを対象としています。`GitHub.api()`は`subprocess.run(..., timeout=45)`で、待機中は`pulse`を呼ばないため、GitHubリクエストが15秒を超えると稼働中のworkerがofflineと表示されることがあります（最大で約45秒）。2026-10-22に修正（下記参照）。
+- 上記のlivenessはMiniMaxの呼出しのみを対象としています。`GitHub.api()`は`subprocess.run(..., timeout=45)`で、待機中は`pulse`を呼ばないため、GitHubリクエストが15秒を超えると稼働中のworkerがofflineと表示されることがあります（最大で約45秒）。2026-10-22に修正（上記参照）。
 
 ## 2026-10-20 追加検証
 
