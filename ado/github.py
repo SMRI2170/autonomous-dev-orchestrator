@@ -2,13 +2,21 @@
 import base64
 import json
 import os
-import subprocess
 from .policy import Blocked, inspect_text, matches, safe_path
+from .process import run
+
+TIMEOUT_SECONDS = 45
+# Generous next to the MiniMax budget: paginated evidence is legitimately large, and the
+# point here is to bound memory rather than to second-guess GitHub's page sizes.
+OUTPUT_LIMIT = 8_000_000
 
 
 class GitHub:
-    def __init__(self, dry_run=True):
+    def __init__(self, dry_run=True, pulse=None):
         self.dry_run = dry_run
+        # Optional liveness callback, called while a request is in flight. Without it a
+        # slow request outlives the dashboard's online window and shows as offline.
+        self.pulse = pulse
         if not dry_run and not os.environ.get("GH_TOKEN"):
             raise Blocked("Live mode requires an explicit repository-scoped GH_TOKEN")
 
@@ -21,13 +29,17 @@ class GitHub:
                 "-H", "Accept: application/vnd.github+json", endpoint]
         if data is not None:
             args += ["--input", "-"]
+        payload = json.dumps(data).encode("utf-8") if data is not None else b""
         try:
-            result = subprocess.run(args, input=json.dumps(data) if data is not None else None,
-                                    capture_output=True, text=True, timeout=45, env=env, check=True)
-            return json.loads(result.stdout) if result.stdout.strip() else None
-        except (subprocess.SubprocessError, ValueError) as exc:
-            # Deliberately omit CLI stderr / remote response (may contain secrets).
-            raise Blocked("GitHub request failed: " + method + " " + endpoint.split("?")[0]) from exc
+            stdout, _ = run(args, TIMEOUT_SECONDS, payload=payload, limit=OUTPUT_LIMIT,
+                            label="GitHub request",
+                            # Deliberately omit CLI stderr / remote response (may contain secrets).
+                            failure="GitHub request failed: " + method + " " + endpoint.split("?")[0],
+                            env=env, pulse=self.pulse)
+            return json.loads(stdout.decode("utf-8")) if stdout.strip() else None
+        except ValueError as exc:
+            raise Blocked("GitHub request returned unparsable JSON: "
+                          + method + " " + endpoint.split("?")[0]) from exc
 
     def pages(self, endpoint, key=None):
         output = []

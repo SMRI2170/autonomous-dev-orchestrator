@@ -1,7 +1,9 @@
 import json
 import os
-import subprocess
+import tempfile
+import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 from ado.github import GitHub
 from ado.policy import Blocked
@@ -18,10 +20,41 @@ class GitHubTests(unittest.TestCase):
             GitHub(False)
 
     def test_transport_does_not_leak_failure_body(self):
-        error = subprocess.CalledProcessError(1, "gh", stderr="SECRET_PRIVATE_RESPONSE")
-        with patch("subprocess.run", side_effect=error), self.assertRaises(Blocked) as caught:
-            GitHub().api("repos/owner/project")
+        # The failure text is built from the method and the endpoint only, so neither the
+        # query string nor anything `gh` wrote can reach it. Without this seam the test
+        # would shell out to the real `gh` and pass without asserting anything.
+        failure = Blocked("GitHub request failed: GET repos/owner/project")
+        with patch("ado.github.run", side_effect=failure), self.assertRaises(Blocked) as caught:
+            GitHub().api("repos/owner/project?per_page=100")
+        self.assertEqual(str(caught.exception), "GitHub request failed: GET repos/owner/project")
         self.assertNotIn("SECRET_PRIVATE_RESPONSE", str(caught.exception))
+
+    def test_slow_request_keeps_the_worker_looking_alive(self):
+        # Regression for #9: a request outliving the dashboard's 15 second online window
+        # used to read as an offline worker, because the transport never pulsed.
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "gh"
+            fake.write_text("#!/bin/sh\nsleep 0.6\nprintf '{}'\n")
+            fake.chmod(0o755)
+            beats = []
+            with patch.dict(os.environ, {"PATH": tmp + os.pathsep + os.environ["PATH"]}):
+                gh = GitHub(pulse=lambda: beats.append(time.monotonic()))
+                self.assertEqual(gh.api("repos/owner/project"), {})
+            # Before the fix this list stayed empty: the transport never pulsed, so a
+            # request outliving the dashboard's online window showed as an offline
+            # worker. No timing assertion -- run() waits up to a second after the
+            # process exits for descendants holding the pipes open.
+            self.assertGreaterEqual(len(beats), 2)
+
+    def test_oversized_response_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "gh"
+            fake.write_text("#!/bin/sh\nyes 0123456789012345678901234567890123456789 | head -c 9000000\n")
+            fake.chmod(0o755)
+            with patch.dict(os.environ, {"PATH": tmp + os.pathsep + os.environ["PATH"]}):
+                with self.assertRaises(Blocked) as caught:
+                    GitHub().api("repos/owner/project")
+            self.assertIn("output budget", str(caught.exception))
 
     def test_pagination_collects_all_evidence(self):
         gh = GitHub()
