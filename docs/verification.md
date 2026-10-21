@@ -5,14 +5,14 @@
 ## 2026-10-21 追加検証
 
 - PR #7のCodeRabbit（CHANGES_REQUESTED）とCodex（P2 3件）の未解決指摘5件を修正し、`compileall -q ado scripts tests`成功、`node --check ado/web/app.js`成功。ダッシュボードはHTTP 200と実データ投影を再確認。
-- マージ後の追加指摘4件を修正し、PR #7をsquash mergeしました（`f0669cb`）。CodeRabbitの最終レビューはCOMMENTED、未解決スレッド0、CI成功、mergeStateStatus CLEAN。main上で116テスト成功、`compileall`と`node --check`成功、`ado doctor`は実MiniMax 0.6.12に対して`compatible: true`・`model_called: false`。
+- 追加の指摘4件（`REVIEWING`の工程表示、heartbeatスレッド、待機中のliveness、そのテスト）を修正した上でPR #7をsquash mergeしました（`f0669cb`）。CodeRabbitの最終レビューはCOMMENTED、未解決スレッド0、CI成功、mergeStateStatus CLEAN。main上で116テスト成功、`compileall`と`node --check`成功、`ado doctor`は実MiniMax 0.6.12に対して`compatible: true`・`model_called: false`。
 
 ### 指摘と対処
 
 - キーボードフォーカスが再描画で失われる。工程ノードに`data-stage`、ジョブボタンに`dataset.job`を付け、再構築前にフォーカス要素を記録し一致する新要素へ戻す。
 - `/api/status`の取得失敗が無言で古い表示が残る。ライブ/demo両方で接続エラーを表示し、未取得時と取得済み時で文言を分ける。
 - 相対時刻（`0秒前`など）が変更なしポーリングで更新されない。`.job-age`を毎回の取得成功時に再計算する。
-- `ado doctor`のhelpプローブ出力が無制限だった。`generate`と同じストリーム単位2MB上限とプロセスグループ停止を共有ヘルパー`drain()`に統一し、`while(true)`で書き続けるCLIでも停止することをNode fixtureで実証。
+- `ado doctor`のhelpプローブ出力が無制限だった。`generate`と同じ、stdoutとstderrの合計2,000,000バイトの上限とプロセスグループ停止を共有ヘルパー`drain()`に統一し、`while(true)`で書き続けるCLIでも停止することをNode fixtureで実証。
 - `docs/setup.md`と`examples/config.toml`で`entry`がソースビルドの`dist/cli.js`固定だった。npm版とソースビルド版の対応表を追加し、`runtime_root`とのずれがdoctorで失敗する旨を明記。
 - 履歴ベースの工程上書きに`REVIEWING`が含まれ、レビュアー呼び出し直前の`checks`イベントが勝って、レビューに時間がかかるあいだCIの工程と表示されていた。`REVIEWING`を上書き対象から外し、`Engine.step`は`REVIEWING`を保存する前にreview工程のイベントを記録。
 - heartbeatスレッドを残したままだと`Popen(preexec_fn=...)`のforkでCPythonが警告する危険があり、`Popen`が返らない間に子プロセスの停止も期限も機能しない。スレッドを廃止し、長時間呼出しは自前のI/Oループの`pulse`から、`Store.touch()`と`Store.idle()`から生存通知を出す形に変更。
@@ -22,7 +22,8 @@
 ### 未検証
 
 - ブラウザによるキーボード操作とフォーカス復帰の実操作確認は未実施です。JSにはCIの自動テストがなく、PythonのテストはマーカーとHTTP応答までを確認します。
-- 上記helper`drain()`は`selectors.DefaultSelector`でstdin/stdout/stderrを同一スレッドがまとめて読み書きし、期限超過・上限超過の検出とプロセス群へのSIGKILLを同じ呼び出し内の`finally`で行います。readerスレッドは存在しないため、停止シグナルが届かない経路はありません。以前の実装（readerスレッドがSIGKILLを送り主スレッドの`finally`が回収を担保する形式）では15秒タイムアウトが1回だけ観測されましたが、現行形式では10回連続で再現せず、原因は特定できていません。旧形式での初回観測の記録であり、現行実装の不具合としては再現していません。
+- 上記helper`drain()`は`selectors.DefaultSelector`でstdin/stdout/stderrを同一スレッドがまとめて読み書きし、期限超過と合計出力上限の超過を検出します。プロセス群へのSIGKILLと回収は`drain()`ではなく、それを呼び出す`doctor`と`generate`の各`finally`が行います。readerスレッドは存在しないため、旧形式のように停止シグナルが届かない経路はありません。以前の実装（readerスレッドがSIGKILLを送り主スレッドの`finally`が回収を担保する形式）では15秒タイムアウトが1回だけ観測されましたが、現行形式では10回連続で再現せず、原因は特定できていません。旧形式での初回観測の記録であり、現行実装の不具合としては再現していません。
+- 上記のlivenessはMiniMaxの呼出しのみを対象としています。`GitHub.api()`は`subprocess.run(..., timeout=45)`で、待機中は`pulse`を呼ばないため、GitHubリクエストが15秒を超えると稼働中のworkerがofflineと表示されることがあります（最大で約45秒）。未修正。
 
 ## 2026-10-20 追加検証
 
