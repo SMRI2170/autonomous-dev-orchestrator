@@ -51,7 +51,7 @@ def main():
                               "auto_merge": cfg["auto_merge"], "repository_count": len(cfg["repositories"]),
                               "explicit_github_token": bool(os.environ.get("GH_TOKEN")),
                               "subscription_confirmed": cfg.get("minimax", {}).get("subscription_confirmed", False),
-"minimax_runtime": MiniMax(cfg.get("minimax", {})).runtime_status(),
+                              "minimax_runtime": MiniMax(cfg.get("minimax", {})).runtime_status(),
                               "review_providers": {r["name"]: r.get("review_provider", "coderabbit")
                                                    for r in cfg["repositories"]},
                               "projects_write_supported": False, "codex_automatic_supported": False}, indent=2))
