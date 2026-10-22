@@ -2,6 +2,25 @@
 
 検証日: 2026-10-18（Asia/Tokyo）。初期MVPの記録です。
 
+## 2026-10-22 追加検証
+
+- GitHubのlivenessギャップ（[Issue #9](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/9)）を修正。124テスト成功、`compileall`成功、`ado doctor`は実MiniMax 0.6.12に対して`compatible: true`・`model_called: false`。実Seatbeltのテストも成功。
+
+### 指摘と対処
+
+- `GitHub.api()`が`subprocess.run(..., timeout=45)`でブロックし`pulse`を呼ばないため、ダッシュボードの15秒ウィンドウを超えるリクエストでは稼働中のworkerが最大約45秒 offline と表示されていた。selectorのループを`ado/process.py`へ移し`drain()`と`run()`に分離して両トランスポートで共有。GitHub側は独自の出力上限8,000,000バイト（ミニマixedの2,000,000ではない）を持つため、ページ分割された証拠を拒否しない。
+- 呼び出し側が重複して持っていたPopen・期限待ち・プロセス群SIGKILL・回収・ストリームクローズを`run()`が一本化して持つようになった。例外時に呼び出し側が後始末を忘れる経路がなくなるため、MiniMax側の`finally`ブロックは削除できた。
+- `test_transport_does_not_leak_failure_body`が`subprocess.run`をpatchしていたが、トランスポートはその関数を使わなくなったため、実`gh`を起動して実ネットワーク応答に対して通過していた。テスト対象をトランスポート自身の接合点に差し替え、`tests/test_process.py`で「出力を伴って失敗するプロセスの出力がBlockedメッセージに入らないこと」を直接検証。
+
+### 実測
+
+- 遅い`gh`（2秒）に対する`worker.json`は、リクエスト中に2.03秒進み、21回の更新が観測された。`pulse`なしの同一条件では、リクエスト中にスタンプが一度も動かない。
+- 15秒を超えるリクエストを実際に発生させる検証は未実施。上記は短縮した時間軸での確認であり、15秒ウィンドウの境界そのものは未実施。閾値の判定そのものは`tests/test_dashboard.py`で別途検証済み。
+
+### 未検証
+
+- ブラウザによるキーボード操作とフォーカス復帰の実操作確認は2026-10-21節のとおり未実施。
+
 ## 2026-10-21 追加検証
 
 - PR #7のCodeRabbit（CHANGES_REQUESTED）とCodex（P2 3件）の未解決指摘5件を修正し、`compileall -q ado scripts tests`成功、`node --check ado/web/app.js`成功。ダッシュボードはHTTP 200と実データ投影を再確認。
@@ -23,7 +42,7 @@
 
 - ブラウザによるキーボード操作とフォーカス復帰の実操作確認は未実施です。JSにはCIの自動テストがなく、PythonのテストはマーカーとHTTP応答までを確認します。
 - 上記helper`drain()`は`selectors.DefaultSelector`でstdin/stdout/stderrを同一スレッドがまとめて読み書きし、期限超過と合計出力上限の超過を検出します。プロセス群へのSIGKILLと回収は`drain()`ではなく、それを呼び出す`doctor`と`generate`の各`finally`が行います。readerスレッドは存在しないため、旧形式のように停止シグナルが届かない経路はありません。以前の実装（readerスレッドがSIGKILLを送り主スレッドの`finally`が回収を担保する形式）では15秒タイムアウトが1回だけ観測されましたが、現行形式では10回連続で再現せず、原因は特定できていません。旧形式での初回観測の記録であり、現行実装の不具合としては再現していません。
-- 上記のlivenessはMiniMaxの呼出しのみを対象としています。`GitHub.api()`は`subprocess.run(..., timeout=45)`で、待機中は`pulse`を呼ばないため、GitHubリクエストが15秒を超えると稼働中のworkerがofflineと表示されることがあります（最大で約45秒）。未修正（[Issue #9](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/9)）。
+- 上記のlivenessはMiniMaxの呼出しのみを対象としています。`GitHub.api()`は`subprocess.run(..., timeout=45)`で、待機中は`pulse`を呼ばないため、GitHubリクエストが15秒を超えると稼働中のworkerがofflineと表示されることがあります（最大で約45秒）。2026-10-22に修正（上記参照）。
 
 ## 2026-10-20 追加検証
 

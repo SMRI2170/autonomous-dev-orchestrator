@@ -57,7 +57,7 @@ def main():
                               "projects_write_supported": False, "codex_automatic_supported": False}, indent=2))
         else:
             model = MiniMax(cfg.get("minimax", {}), pulse=store.touch)
-            engine = Engine(cfg, store, GitHub(cfg["dry_run"]), model, MiniMaxReviewer(model))
+            engine = Engine(cfg, store, GitHub(cfg["dry_run"], pulse=store.touch), model, MiniMaxReviewer(model))
             with store.heartbeat():
                 while True:
                     print(redact(json.dumps(engine.tick(), ensure_ascii=False)), flush=True)
