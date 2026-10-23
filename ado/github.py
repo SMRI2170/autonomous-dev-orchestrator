@@ -2,7 +2,7 @@
 import base64
 import json
 import os
-from .policy import Blocked, inspect_text, matches, safe_path
+from .policy import Blocked, inspect_source, matches, safe_path
 from .process import run
 
 TIMEOUT_SECONDS = 45
@@ -97,7 +97,7 @@ class GitHub:
                 content = base64.b64decode(blob["content"], validate=False).decode("utf-8")
             except (ValueError, UnicodeError) as exc:
                 raise Blocked("Non-UTF8 context") from exc
-            inspect_text(content)
+            inspect_source(content)
             total += len(content.encode())
             if total > config.get("max_context_bytes", 150000):
                 raise Blocked("Context budget exceeded")

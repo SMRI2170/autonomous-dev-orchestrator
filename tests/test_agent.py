@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from ado.agent import MiniMax, prompt
-from ado.policy import Blocked
+from ado.policy import Blocked, UnusableOutput
 from tests.fakes import issue, repo_config
 
 
@@ -21,6 +21,21 @@ class AgentTests(unittest.TestCase):
                 return
             time.sleep(0.05)
         self.fail(f"Process {pid} survived sandbox cleanup")
+
+    def test_only_rejected_answers_are_recoverable(self):
+        # The replay boundary. Real job 2 published PR #13 and then died because a
+        # completed call with unusable output was recorded as an interruption.
+        adapter = MiniMax({})
+        with patch.object(MiniMax, "invoke", return_value="sorry, I cannot help"):
+            with self.assertRaises(UnusableOutput):
+                adapter.generate(issue(), {}, repo_config(), [])
+        with patch.object(MiniMax, "invoke", return_value='{"files":{"docs/a.md":"ok"}}'):
+            self.assertEqual(adapter.generate(issue(), {}, repo_config(), []), {"docs/a.md": "ok"})
+        # A call that never returned is still a plain Blocked, so the engine refuses to replay it.
+        with patch.object(MiniMax, "invoke", side_effect=Blocked("MiniMax execution deadline exceeded")):
+            with self.assertRaises(Blocked) as caught:
+                adapter.generate(issue(), {}, repo_config(), [])
+        self.assertNotIsInstance(caught.exception, UnusableOutput)
 
     def test_prompt_data_cannot_supply_commands_or_policy(self):
         attack = issue()

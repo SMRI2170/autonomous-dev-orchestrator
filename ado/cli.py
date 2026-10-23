@@ -31,7 +31,7 @@ def main():
             from .dashboard import serve
             serve(cfg, args.port)
             return 0
-        store = Store(cfg["state_dir"])
+        store = Store(cfg["state_dir"], cfg.get("max_repairs", 3))
         if args.command == "status":
             print(json.dumps([{"job": r["id"], "repo": r["repo"], "issue": r["issue"], "state": r["state"],
                                "repairs": json.loads(r["data"]).get("repairs", 0),

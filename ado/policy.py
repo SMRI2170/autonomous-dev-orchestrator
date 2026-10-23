@@ -9,6 +9,15 @@ class Blocked(RuntimeError):
     pass
 
 
+class UnusableOutput(Blocked):
+    """The model call finished and was billed; only its output was rejected.
+
+    Distinct from an in-flight failure. An interrupted call must never be replayed,
+    but a completed one is already spent either way, so a bounded repair attempt
+    recovers the job instead of discarding the work it has already published.
+    """
+
+
 SECRET = re.compile(
     r"(?i)(?:gh[pousr]_[a-z0-9_]{20,}|github_pat_[a-z0-9_]{20,}|"
     r"sk-[a-z0-9_-]{16,}|AKIA[A-Z0-9]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
@@ -50,11 +59,24 @@ def safe_path(path):
     return path
 
 
-def inspect_text(text):
+def inspect_source(text):
+    """Check text read back from the repository before it becomes model context.
+
+    Credentials are refused: they would otherwise ride into the prompt and could be
+    echoed back into an output change. A committed file that merely *names* a
+    dangerous primitive is ordinary documentation -- a security note, a migration log,
+    our own verification history -- and refusing it made the orchestrator unable to
+    read its own repository. inspect_text keeps the stricter rule for model output.
+    """
     if not isinstance(text, str) or "\x00" in text:
         raise Blocked("Only UTF-8 text files are supported")
     if SECRET.search(text):
         raise Blocked("Potential secret detected")
+
+
+def inspect_text(text):
+    """Check text the model proposed, which may become executable project content."""
+    inspect_source(text)
     if DANGEROUS.search(text):
         raise Blocked("Dangerous command or execution primitive detected")
 

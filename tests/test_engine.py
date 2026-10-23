@@ -2,9 +2,9 @@ import json
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from ado.engine import Engine
-from ado.policy import Blocked
+from ado.policy import Blocked, UnusableOutput
 from ado.state import Store
 from tests.fakes import Agent, GitHub, config, issue
 
@@ -31,7 +31,6 @@ class EngineTests(unittest.TestCase):
 
 
     def setup_minimax_review(self, verdict="APPROVE", findings=None):
-        from unittest.mock import Mock
         self.cfg["repositories"][0]["review_provider"] = "minimax"
         self.engine.reviewer = Mock()
         self.engine.reviewer.review.return_value = {
@@ -166,6 +165,190 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.agent.calls, 4)
         with self.assertRaises(Blocked):
             self.store.retry(1)
+
+    def test_the_retry_budget_is_the_configured_one(self):
+        # Regression: the store compared against a hardcoded 3 while the engine used the
+        # configured max_repairs. A job configured with 4 could never be resumed, so the
+        # extra round the engine allowed was unreachable.
+        wide = Store(self.temp.name + "-wide", max_repairs=4)
+        row = wide.add("owner/project", 1)
+        wide.save(row, "BLOCKED", {"repairs": 3, "resume": "REVIEW"})
+        wide.retry(row["id"])
+        self.assertEqual(wide.get("owner/project", 1)["state"], "REVIEW")
+        # The default budget still refuses the same job.
+        narrow = Store(self.temp.name + "-narrow")
+        row = narrow.add("owner/project", 1)
+        narrow.save(row, "BLOCKED", {"repairs": 3, "resume": "REVIEW"})
+        with self.assertRaises(Blocked):
+            narrow.retry(row["id"])
+        wide.db.close()
+        narrow.db.close()
+
+    def unusable_agent(self, rejections):
+        """Make the next `rejections` calls fail as unusable output, then behave normally."""
+        remaining = [rejections]
+        inner = self.agent.generate
+
+        def generate(issue, files, config, feedback):
+            if remaining[0] > 0:
+                remaining[0] -= 1
+                self.agent.calls += 1
+                self.agent.inputs.append(list(feedback))
+                raise UnusableOutput("Model returned output that is not a strict changes object")
+            return inner(issue, files, config, feedback)
+
+        self.agent.generate = generate
+
+    def test_a_finding_the_head_already_answers_waits_instead_of_burning_a_repair(self):
+        # A finding raised against an earlier head is fed back so the model can act on it.
+        # When the current head already answers it, the model has nothing to change, and a
+        # no-op must not be published, must not cost a repair, and must not be asked again.
+        content = "# Glossary\nPR: pull request. Revision 1.\n"
+        calls = []
+
+        def generate(issue, files, config, feedback):
+            calls.append(feedback)
+            if len(calls) == 1:
+                return {"docs/glossary.md": content}
+            # Later calls return the published content unchanged: nothing left to do.
+            return dict(files)
+
+        self.agent.generate = generate
+        self.gh.threads = [{"isResolved": False, "isOutdated": True,
+                            "comments": {"nodes": [{"body": "old finding", "commit": {"oid": "old"}}]}}]
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "REVIEW")          # repair attempt finds nothing to do
+        record = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(record["repairs"], 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.tick(), "REVIEW")          # must not ask the model again
+        self.assertEqual(len(calls), 2)
+        record = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(record["repairs"], 0)
+        self.assertEqual(self.gh.published, 1)           # no no-op publication
+
+    def test_the_minimax_review_runs_while_a_third_party_status_is_pending(self):
+        # Regression: the review used to require mergeable_state == "clean". On a
+        # repository whose ruleset requires review threads to be resolved, a PR with
+        # threads is "blocked" and one with a pending bot status is "unstable", so the
+        # review never ran. No real job in this project had ever produced a review.
+        for state in ("unstable", "blocked"):
+            with self.subTest(state=state):
+                self.setUp()
+                reviewer = self.setup_minimax_review()
+                self.publish()
+                self.gh.mergeable_state = state
+                self.assertEqual(self.tick(), "REVIEW")
+                self.assertEqual(reviewer.review.call_count, 1)
+
+    def test_the_minimax_review_does_not_run_on_a_conflicted_or_behind_head(self):
+        for state in ("dirty", "behind", "unknown"):
+            with self.subTest(state=state):
+                self.setUp()
+                reviewer = self.setup_minimax_review()
+                self.publish()
+                self.gh.mergeable_state = state
+                self.assertEqual(self.tick(), "REVIEW")
+                reviewer.review.assert_not_called()
+
+    def test_a_stale_thread_does_not_stop_the_minimax_review(self):
+        # An unresolved thread from an earlier head waits for a human. It must not stop
+        # the MiniMax review, which is the only remaining automatable step.
+        reviewer = self.setup_minimax_review()
+        self.publish()
+        self.gh.threads = [{"isResolved": False, "isOutdated": True,
+                            "comments": {"nodes": [{"body": "old finding", "commit": {"oid": "old"}}]}}]
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(reviewer.review.call_count, 1)
+
+    def test_a_finding_at_the_current_head_still_obliges_the_model_to_change_something(self):
+        # The counterpart of the test above: a finding raised against the head being
+        # repaired is outstanding, so the model is asked again even when the head did
+        # not move and the previous answer was a no-op.
+        content = "# Glossary\nPR: pull request. Revision 1.\n"
+        calls = []
+
+        def generate(issue, files, config, feedback):
+            calls.append(feedback)
+            if len(calls) == 1:
+                return {"docs/glossary.md": content}
+            return dict(files)
+
+        self.agent.generate = generate
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.tick(), "REVIEW")
+        self.gh.threads = [{"isResolved": False, "isOutdated": False,
+                            "comments": {"nodes": [{"body": "current finding",
+                                                    "commit": {"oid": self.gh.head}}]}}]
+        self.tick()
+        self.assertGreater(len(calls), 2)
+
+    def test_unusable_output_is_repaired_instead_of_blocking_the_job(self):
+        # Regression: real job 2 died "Agent must return a single strict JSON object with
+        # files" after publishing PR #13, because every agent error was recorded as an
+        # interrupted call. A call that already returned was billed either way.
+        self.unusable_agent(1)
+        self.assertEqual(self.tick(), "PUBLISHING")
+        record = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual((record["calls"], record["repairs"]), (2, 1))
+        # The rejection reason went back to the model on the retry.
+        self.assertEqual(self.agent.inputs[1],
+                         [{"kind": "output", "body": "Model returned output that is not a strict changes object"}])
+        self.assertEqual(self.tick(), "REVIEW")
+
+    def test_output_retry_keeps_the_review_findings_that_caused_the_repair(self):
+        # Regression: real job 3 discarded the ten review threads on its first repair
+        # retry, so the regenerated file still carried every finding it had been given.
+        self.publish()
+        self.gh.review = "FAIL"
+        self.assertEqual(self.tick(), "PUBLISHING")          # repair on the review findings
+        self.assertEqual(self.tick(), "REVIEW")
+        record = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(record["repairs"], 1)
+        self.assertEqual(record["calls"], 2)
+        self.unusable_agent(1)
+        self.assertEqual(self.tick(), "PUBLISHING")          # output rejected, retried
+        self.assertEqual(self.agent.calls, 4)
+        findings = self.agent.inputs[3]
+        self.assertEqual(findings, [
+            {"kind": "review", "body": "Please fix the glossary"},
+            {"kind": "output", "body": "Model returned output that is not a strict changes object"}])
+
+    def test_unusable_output_is_terminal_only_once_repairs_run_out(self):
+        self.unusable_agent(99)
+        self.assertEqual(self.tick(), "BLOCKED")
+        record = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual((record["calls"], record["repairs"]), (4, 3))
+        self.assertIn("not a strict changes object", record["reason"])
+
+    def test_an_interrupted_call_is_still_never_replayed(self):
+        # The other half of the boundary: a call that did not return may already have been
+        # billed, so it keeps resume=BUILDING and spends no repair attempt.
+        for error in (OSError("connection reset"), Blocked("MiniMax execution deadline exceeded")):
+            with self.subTest(error=type(error).__name__):
+                self.setUp()
+                self.agent.generate = Mock(side_effect=error)
+                self.assertEqual(self.tick(), "BLOCKED")
+                record = json.loads(self.store.get("owner/project", 1)["data"])
+                self.assertEqual(record["resume"], "BUILDING")
+                self.assertEqual((record["calls"], record["repairs"]), (1, 0))
+                self.assertEqual(self.agent.generate.call_count, 1)
+
+    def test_post_call_checks_all_report_a_recoverable_type(self):
+        # validate_changes and the tree-mode checks run after the call returned, so every
+        # one of them must exit as UnusableOutput; a bare Blocked would disable the repair.
+        cfg = self.cfg["repositories"][0]
+        cases = [
+            ({}, {}, {}),                                    # empty change set
+            ({"docs/glossary.md": "# Glossary\n"}, {"docs/glossary.md": "# Glossary\n"}, {}),
+            ({"secrets.txt": "hello\n"}, {}, {}),            # outside the allowlist
+            ({"docs/glossary.md": "x\n"}, {}, {"docs": "100644"}),   # file used as a directory
+            ({"docs/glossary.md": "x\n"}, {}, {"docs": "120000"}),   # symlink/executable boundary
+        ]
+        for changes, snapshot, modes in cases:
+            with self.subTest(modes=modes), self.assertRaises(UnusableOutput):
+                self.engine.usable(changes, cfg, snapshot, modes, {})
 
     def test_missing_or_old_review_never_merges(self):
         self.cfg["auto_merge"] = True

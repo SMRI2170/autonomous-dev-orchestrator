@@ -62,9 +62,28 @@ class ReviewTests(unittest.TestCase):
                                 "comments": {"nodes": [{"body": "fix this", "commit": {"oid": "head"}}]}}]
         self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "REPAIR")
         self.ev["threads"][0]["isOutdated"] = True
-        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "WAIT")
+        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "REPAIR")
         self.ev["threads"][0]["isResolved"] = True
         self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "PASS")
+
+    def test_finding_raised_against_an_earlier_head_still_reaches_the_model(self):
+        # Regression: real job 3 stalled because findings posted against the previous
+        # head were recorded as "unresolved old review thread" and never appeared in the
+        # repair feedback. The model was never told about them, so it could not fix them.
+        self.ev["threads"] = [{"isResolved": False, "isOutdated": True,
+                                "comments": {"nodes": [{"body": "still broken", "commit": {"oid": "old"}}]}}]
+        decision, feedback = judge(self.pr, self.ev, self.cfg)
+        self.assertEqual(decision, "REPAIR")
+        self.assertEqual(feedback, [{"kind": "thread", "body": "still broken", "sha": "old"}])
+
+    def test_a_stale_finding_still_blocks_a_pass(self):
+        self.ev["threads"] = [{"isResolved": False, "isOutdated": True,
+                                "comments": {"nodes": [{"body": "still broken", "commit": {"oid": "old"}}]}}]
+        decision, feedback = judge(self.pr, self.ev, self.cfg)
+        self.assertEqual(decision, "REPAIR")
+        # Nothing about a stale thread may let a job through on its own.
+        self.ev["threads"][0]["comments"]["nodes"][0]["body"] = "still broken"
+        self.assertNotEqual(judge(self.pr, self.ev, self.cfg)[0], "PASS")
 
     def test_human_changes_requested_remains_veto(self):
         self.ev["reviews"].append({"id": 2, "user": {"login": "human", "type": "User"},

@@ -2,6 +2,71 @@
 
 検証日: 2026-10-18（Asia/Tokyo）。初期MVPの記録です。
 
+## 2026-10-23 実サービスでのループ検証（Issue #12 / #14 / #16 / #18、PR #13 / #15 / #17 / #19）
+
+`dry_run = false` で実サービスに接続し、Issue #18 から実PRの修正ループを最後まで一周させました。fixtureは使っていません。**Issue → 実MiniMax生成 → 実commit → 実branch → 実PR → CI → MiniMaxレビュー → 外部レビュー → PASS → AWAITING_HUMAN（人手マージ待ち）** まで到達し、修正は0回でした。自動マージは行っていません。
+
+- 実MiniMaxが 38,813 bytes のプロンプトで `docs/operator-runbook.md` を生成し、`validate_changes` を通って実commit `ea4b07cc`・実branch `ado/issue-12`・実PR #13 が作成されました。
+- CI成功後、`judge()` がSHAに紐づく証拠（check-run / review / GraphQL review thread）を評価しREPAIRを返しました。指摘はADO自身のGraphQLクエリで取得できたことを確認しています。
+- REPAIRで再生成し、新head `86c30852f1ce` でCI成功まで到達しました。
+- `auto_merge` はグローバルとリポジトリの両方で `false` のままです。MiniMaxの自己reviewが自動マージを許可しないことはコードで保証されています。
+- heartbeatは実MiniMax呼出し中に `worker.json` が48.6秒進み、経過0.1秒でした。
+
+### 完全ループの実サービス動作（Issue #18 / PR #19）
+
+- Issue #18 から実MiniMaxが `docs/glossary.md` と `README.md` を生成し、1回目の実装で受入条件をすべて満たしました（9語・引用先・1文制約・dry-runのローカル書き込み・PRの自動マージと低リスク条件・review threadと未解決スレッドの区別・READMEリンク）。機械的に検証して確認しています。
+- 実commit `097a58ccb`・実branch `ado/issue-18`・実PR #19 を作成し、`checks / unit` はsuccess。
+- MiniMaxレビューは `APPROVE`（指摘0件）。head SHA と変更digestに束縛された記録として保存されています。
+- CodeRabbit も `APPROVED`。未解決スレッド0、PRの状態は `CLEAN` になりました。
+- `judge()` がPASSを返し、ジョブは `AWAITING_HUMAN`（人手マージ待ち）に入りました。自動マージは行っていません。
+- ジョブ5の記録: `repairs=0`、`calls=1`、レビュー `APPROVE`（sha `097a58ccb`）。修正0回で到達したのは、Issue #16 の4回の修復で仕様を詰めたためです。
+
+### MiniMaxレビューの実サービス動作（Issue #16 / PR #17）
+
+- 実MiniMaxレビューが 처음으로実サービス上で走りました。`5d50e9429` に対する判定は `APPROVE`（指摘0件）で、head SHA と変更内容のdigestの両方に束縛された記録として保存されました。
+- Codexの指摘2件（check-runを検査実行の記録と定義する／dry-runでもローカル状態は記録する）を頭から直した `d3cd43b5a` に対し、同じMiniMaxレビューが `REQUEST_CHANGES` を返し、`dry-run` の説明が1文に収まっていないという受入条件違反を指摘しました。指摘は次の修復入力としてモデルに渡されます。
+- レビューは2回目で200秒近くかかりました。heartbeatは露出一らず、呼び出しは正常に完了しました。応答時間の分布は未計測です。
+
+### 実サービスで見つかった不具合（6件）
+
+1. **入力検査と出力検査が同一だった。** 本リポジトリ自身の `docs/verification.md` が `subprocess.run` という語を含むため、コンテキスト読み取りが拒否してジョブを開始できませんでした。入力側を `inspect_source`（機密のみ拒否）に分離し、出力側の `inspect_text` はより厳しいまま残しました。回帰テスト2件を追加し、3つの変異（入力側を `inspect_text` に戻す・出力側から危険語を削る・入力側から機密検査を削る）で検査が機能することを確認しています。
+2. **Issue #11 の受入条件が満たせなかった。** 条件が `engine.py` の全reason文字列を要求していますが、`engine.py` は `allowed_paths` にも `context_paths` にもないためモデルから見えません。モデルは `{"files":{}}` を返し、これは `Blocked("Empty/oversized change set")` として報告されました。#11 に説明コメントを付けて閉じ、`docs/architecture.md` の状態表だけを根拠にした #12 を作り直しました。
+3. **完了した呼び出しの不正出力が終端だった。** strict JSON に違反した出力（2件目）が `resume="BUILDING"` により「中断」扱いとなり、ジョブは二度と復帰せず、公開済みのPR #13 の作業も捨てられていました。`UnusableOutput(Blocked)` を導入し「呼び出しは完了したが使えない出力」と「中断」を区別しました。中断は従来どおり再生禁止のまま、完了した出力だけが修復予算を1回消費して自動再試行します。
+4. **出力の再試行でレビュー指摘を落としていた。** 上記3の自動再試行は、理由だけをモデルに渡し、元のレビュー指摘を捨てていました。実ジョブ3で、修正すべき内容をモデルが知らされずに再生成されることを確認しました。指摘を先頭に、拒否理由を末尾に足して渡し直します。
+5. **旧headの指摘が修正入力から消えていた。** `judge()` は未解決スレッドが現在のSHA以外でraisedされていると `unresolved old review thread` としてWAIT扱いだけにし、修復入力には入れていませんでした。実ジョブ3で、Codex/CodeRabbitが最初のheadに付けた指摘がモデルに一度も渡らず、修正が永久に進まないことを確認しました。古い指摘も修復入力に含め、PASSは引き続き人がスレッドを解決するまで出さないようにしました。
+6. **MiniMaxレビューが一度も実行されていなかった。** レビュー開始の条件に `mergeable_state == "clean"` がありました。本リポジトリの ruleset `protect-main` は `required_review_thread_resolution` を要求するため、スレッドが1件でも残ったPRは `blocked` になり、CodeRabbitのstatusが実行中だと `unstable` になります。結果としてレビューは永久に起動せず、実ジョブ1〜4のどのデータにも `minimax_review` が記録されていませんでした。条件を `reviewable()` に分け、draft・conflicted・behind・hook保留だけを出典として、第三者ボットのstatus待ちや未解決スレッドではレビューを止めないようにしました。あわせて、レビューは「証拠が完全にきれい」のときではなく「headがレビュー可能でCIがgreen」のときに実行するようにし、返ってきた指摘は次の修復入力に合流させます。
+
+### 修正ループの到達点と残件
+
+- Issue #12 のジョブは修復上限（3）に達し `resume="BUILDING"` でBLOCKEDになりました。PR #13 は head `86c30852f1ce` でopen のまま、Codex/CodeRabbit の未解決スレッドが残っています。自動マージは行いません。
+- Issue #14 のジョブ（PR #15）も修復上限に達し、head `3865ec369` でBLOCKEDです。3回目の修復で引用元の誤りはすべて直りましたが、Codex/CodeRabbitの指摘のうち「PRの略語を展開する」「人間確認が条件付きである」「項目間に空行入れる」は、5の不具合でモデルに届いていませんでした。
+- `judge()` の不具合を直した後も、ジョブ3は修復予算（3回）と呼出し予算（4回）を使い切っているため再実行できません。同じ内容を明示的に書いた新Issue #16を作り、予算のある新しいジョブで作り直します。
+- Issue #16 のジョブ（PR #17）は4回の修復で head `5d50e9429` → `d3cd43b5a` → `f8d3151bc` → `b6c238eed` と進み、MiniMaxレビューは `APPROVE` のあと2回目で `REQUEST_CHANGES`（dry-runの説明が1文に収まっていない）を返し、その指摘は次の修復入力に入りました。Codexの2件（dry-runでもローカルに書き込む／check-runは検査実行の記録）も直りましたが、Codexが次のheadに付けた2件（自動マージが有効でも低リスク条件を満たさない場合は人間確認が要る／review threadと未解決スレッドの区別）は残りました。修復上限（3）に達してBLOCKEDです。
+- 残った2件は未修正なので、解決済と偽ってスレッドを閉じることはしません。製品が設計した復旧手順どおり、2件を反映した新Issue #18 を作り、予算のある新しいジョブで作り直します。
+- `Store.retry()` の修復予算が `3` をハードコードしていて設定値（`max_repairs`）と食い違っていました。設定が4のときに許可される1回が実際には到達できませんでした。ストアを設定値に従うよう直しています。
+- CIのcheck-runが `in_progress` のまま完了せず `timeout-minutes` を超えることがありました（全11ステップがsuccessで `Complete job` まで到達）。`gh run rerun` で解消し、`judge()` の最新check-run優先の設計が実データで機能しました。原因はまだ特定できていません。
+- `docs/verification.md` の「LaunchAgentのOS登録・起動はしていません」という記述は、2026-10-23時点の `local.ado.worker`（約48時間稼働、`dry_run = true`、`auto_merge = false`、対象は `SMRI2170/animal-shadow-match`）と一致しません。この記述の更新は未実施です。
+
+### 運用者が介入した操作（PR #15 / PR #17）
+
+- 旧head `806bbe086` の未解決スレッド11件を（現head `0e2ecc3f` に同じ内容を再投稿したうえで）解決しました。判定規則は変えていません。
+- 1件（READMEから用語集へリンクする指摘）は、Issue #14 自身の受入条件「他のファイルを変更しない」と `allowed_paths` の両方が README の変更を禁じているため実装不能です。新Issue #16 では `README.md` を `allowed_paths` に追加して、この指摘を実装可能な形に変えました。
+- PR #17 では、検証済みの2件（dry-runのローカル書き込み、check-runの定義が head `b6c238eed` で直っていることを確認）を返信付きで解決しました。未修正の2件は解決していません。
+- スレッドを人が解決しない限り `judge()` はPASSを返さないため、自動化の上限は「良いPRを出し、人を待つ」です。これは fail-closed の設計どおりの挙動です。
+
+### 未解決・既知の限界
+
+- `{"files":{}}` というモデルの明示的な拒否が、不正なJSONと同じ `Empty/oversized change set` として報告されます。拒否を別の終了型として切り出す対策は未実施です。
+- `MiniMaxReviewer.review()` の出力不備も `REVIEWING` に残って再生不能です。無制限に再試行すると1ポーリングごとに新しいモデル呼出しが発生し、利用量に上限がないため意図的に未修正です。
+- 15秒を超えるGitHubリクエストでのダッシュボード表示は依然として未実施です（上記2026-10-22節を参照）。
+- `snapshot()` は保護パス判定を CONTEXT にも適用するため、`docs/setup.md` と `docs/security.md` はモデルコンテキストから永久に除外されます。後者は意図どおりとして、前者は偽陽性です（ファイル名に `setup` が含まれるため）。Issue #14 の実コンテキストは5ファイルでした。
+- 未解決の指摘がすべて旧SHAのスレッドだけだと、修正すべきものが無いので実装は「変更なし」になります。実装には「変更なし」を示す手段がありませんので、1回だけ実装させて同内容を確認し、以降はそのheadでは実装し直させないようにしました。その間、人はスレッドを解決するまで待つことになります。
+- ブラウザによるキーボード操作とフォーカス復帰の実操作確認は引き続き未実施です。
+
+### テスト
+
+- `python -m unittest discover` は136件成功。新規の回帰テスト（入力/出力の検査分離、完了出力の再試行、中断の再生禁止、出力再試行での指摘保持、旧headの指摘の受け渡し、変更なし時の待機）はそれぞれ変異で検査が機能することを確認済みです。
+
 ## 2026-10-22 追加検証
 
 - GitHubのlivenessギャップ（[Issue #9](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/9)）を修正。124テスト成功、`compileall`成功、`ado doctor`は実MiniMax 0.6.12に対して`compatible: true`・`model_called: false`。実Seatbeltのテストも成功。
