@@ -2,8 +2,8 @@ import hashlib
 import json
 import time
 from datetime import datetime, timezone
-from .policy import (Blocked, UnusableOutput, dependencies, inspect_text, low_risk, redact,
-                     validate_changes)
+from .policy import (Blocked, UnusableOutput, dependencies, inspect_text, low_risk, matches,
+                     redact, safe_path, validate_changes)
 from .review import ci_green, judge, reviewable
 
 TERMINAL = {"DONE", "BLOCKED"}
@@ -131,9 +131,13 @@ class Engine:
         issue = self.current_issue(row, cfg, data)
         if phase == "QUEUED":
             meta = self.gh.metadata(repo)
-            data.update(base_branch=meta["default_branch"], branch=f"ado/issue-{row['issue']}", repairs=0,
-                        calls=0, base=self.gh.branch_head(repo, meta["default_branch"]))
-            self.build(row, data, cfg, issue, [])
+            if "base" not in data:
+                # A fresh job. A job that comes back to QUEUED after a rejected output
+                # keeps its counters: the call that was already billed must stay
+                # counted, or the budget could be exceeded by repeated retries.
+                data.update(base_branch=meta["default_branch"], branch=f"ado/issue-{row['issue']}",
+                            repairs=0, calls=0, base=self.gh.branch_head(repo, meta["default_branch"]))
+            self.build(row, data, cfg, issue, data.pop("pending_feedback", []))
         elif phase == "PUBLISHING":
             self.publish(row, data)
         elif phase in ("REVIEW", "AWAITING_HUMAN"):
@@ -258,6 +262,26 @@ class Engine:
         return isinstance(review, dict) and review.get("sha") == data.get("head") and \
             review.get("changes_digest") == digest
 
+    def unchanged(self, changes, cfg, files):
+        """Is this a valid proposal that changes nothing?
+
+        The paths and the values are checked first: a malformed answer can compare
+        equal to the snapshot -- a null value where the snapshot has none -- and must
+        not be mistaken for a confirmation that there is nothing to do.
+        """
+        if not isinstance(changes, dict) or not changes:
+            return False
+        for path, content in changes.items():
+            if not isinstance(content, str):
+                return False
+            try:
+                safe_path(path)
+            except Blocked:
+                return False
+            if not matches(path, cfg["allowed_paths"]):
+                return False
+        return all(files.get(path) == content for path, content in changes.items())
+
     def stale_only(self, feedback, head):
         """Is every finding raised against a head other than the one being reviewed?"""
         items = [item for item in feedback if isinstance(item, dict)]
@@ -278,10 +302,13 @@ class Engine:
         if data["calls"] >= 1 + self.config["max_repairs"]:
             raise Blocked("Model call budget exhausted")
         parent = data.get("head", data["base"])
-        if repair and not self.outstanding(feedback, parent) and data.get("settled_head") == parent:
-            # This head was already found to have nothing outstanding, and the head has
-            # not moved since. Do not spend another model call to learn the same thing --
-            # and do not charge a call to the budget either: no call is made here.
+        settled = data.get("settled") or {}
+        if repair and not self.outstanding(feedback, parent) and \
+                settled.get("head") == parent and settled.get("feedback") == digest(feedback):
+            # This head was already found to have nothing outstanding for exactly this
+            # feedback, and neither the head nor the findings have changed. Do not spend
+            # another model call to learn the same thing -- and do not charge a call to
+            # the budget either: no call is made here.
             self.activity(row, "settled", reason="no change outstanding at this head")
             self.store.save(row, "REVIEW", data)
             return
@@ -294,14 +321,14 @@ class Engine:
         try:
             self.activity(row, "implement", repairing=bool(feedback), file_count=len(files))
             changes = self.agent.generate(issue, files, cfg, feedback)
-            if repair and changes and not self.outstanding(feedback, parent) and \
-                    all(files.get(path) == content for path, content in changes.items()):
+            if repair and not self.outstanding(feedback, parent) and \
+                    self.unchanged(changes, cfg, files):
                 # Every outstanding finding was raised against an earlier head and the
                 # current head already answers it, so the model had nothing to change.
                 # Publishing a no-op is forbidden; waiting for a human to resolve the stale
                 # threads is the correct outcome, and it must not cost a repair attempt.
                 data["repairs"] -= 1
-                data["settled_head"] = parent
+                data["settled"] = {"head": parent, "feedback": digest(feedback)}
                 self.activity(row, "settled", reason="no change outstanding at this head")
                 self.store.save(row, "REVIEW", data)
                 return
@@ -323,6 +350,7 @@ class Engine:
             # fails transiently the job would otherwise be left in BUILDING, which
             # retry() refuses as an interrupted call that was never interrupted.
             self.store.save(row, "REVIEW" if data.get("pr") else "QUEUED", data)
+            data["pending_feedback"] = list(feedback) + [{"kind": "output", "body": str(exc)}]
             # Carry the original review findings forward. The retry is still working on
             # the same findings; replacing them with the rejection reason alone left the
             # model with no idea what it had been asked to fix.

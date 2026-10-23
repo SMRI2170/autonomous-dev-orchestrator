@@ -99,7 +99,8 @@ def judge(pr, evidence, config, minimax_review=None, changes_digest=None):
             waiting.append("unresolved old review thread")
             continue
         body = redact(comments[0]["body"])[:8000]
-        thread_sha = comments[0].get("commit", {}).get("oid")
+        # The commit can be null: a force push can drop the commit a thread refers to.
+        thread_sha = (comments[0].get("commit") or {}).get("oid")
         if not thread["isOutdated"] and thread_sha == sha:
             feedback.append({"kind": "thread", "body": body, "sha": sha})
         else:

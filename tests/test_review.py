@@ -85,6 +85,15 @@ class ReviewTests(unittest.TestCase):
         self.ev["threads"][0]["comments"]["nodes"][0]["body"] = "still broken"
         self.assertNotEqual(judge(self.pr, self.ev, self.cfg)[0], "PASS")
 
+    def test_a_thread_whose_commit_is_gone_does_not_crash_the_judge(self):
+        # A force push can drop the commit a thread refers to, and GitHub then returns
+        # a null commit. The judge must treat that as an old thread, not raise.
+        self.ev["threads"] = [{"isResolved": False, "isOutdated": True,
+                                "comments": {"nodes": [{"body": "fix this", "commit": None}]}}]
+        decision, feedback = judge(self.pr, self.ev, self.cfg)
+        self.assertEqual(decision, "REPAIR")
+        self.assertEqual(feedback, [{"kind": "thread", "body": "fix this", "sha": None}])
+
     def test_human_changes_requested_remains_veto(self):
         self.ev["reviews"].append({"id": 2, "user": {"login": "human", "type": "User"},
                                     "commit_id": "old", "state": "CHANGES_REQUESTED", "body": "fix"})

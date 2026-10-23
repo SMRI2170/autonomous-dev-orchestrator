@@ -344,6 +344,72 @@ class EngineTests(unittest.TestCase):
         self.assertNotIn("Maximum repair attempts", data.get("reason", ""))
         self.assertEqual(data.get("head"), head)
 
+    def test_a_malformed_answer_is_not_taken_for_an_unchanged_confirmation(self):
+        # Regression: a null value where the snapshot has none compares equal, so a
+        # malformed answer could mark the head settled and suppress every later repair.
+        cfg = self.cfg["repositories"][0]
+        snapshot = {"docs/glossary.md": "# Glossary\n"}
+        self.assertFalse(self.engine.unchanged({"docs/glossary.md": None}, cfg, snapshot))
+        self.assertFalse(self.engine.unchanged({"docs/notes.md": None}, cfg, snapshot))
+        self.assertFalse(self.engine.unchanged({"docs/notes.md": "x"}, cfg, snapshot))
+        self.assertFalse(self.engine.unchanged({}, cfg, snapshot))
+        self.assertTrue(self.engine.unchanged({"docs/glossary.md": "# Glossary\n"}, cfg, snapshot))
+
+    def test_a_new_finding_for_a_settled_head_is_sent_to_the_model(self):
+        # Regression: the settled head was remembered without the findings it settled,
+        # so a thread that arrived later for the same head was swallowed and the job
+        # waited for ever without the model ever seeing it.
+        content = "# Glossary\nPR: pull request. Revision 1.\n"
+        calls = []
+
+        def generate(issue, files, config, feedback):
+            calls.append(feedback)
+            return {"docs/glossary.md": content} if len(calls) == 1 else dict(files)
+
+        self.agent.generate = generate
+        self.gh.threads = [{"isResolved": False, "isOutdated": True,
+                            "comments": {"nodes": [{"body": "old finding", "commit": {"oid": "old"}}]}}]
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "REVIEW")          # settles on the first stale finding
+        self.assertEqual(len(calls), 2)
+        # A second, different finding for the same head must reach the model.
+        self.gh.threads = [{"isResolved": False, "isOutdated": True,
+                            "comments": {"nodes": [{"body": "newer finding", "commit": {"oid": "old"}}]}}]
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(len(calls), 3)
+        self.assertIn("newer finding", calls[2][0]["body"])
+
+    def test_a_resumed_job_keeps_the_calls_it_has_already_spent(self):
+        # Regression: a job that came back to QUEUED after a rejected output had its
+        # counters reset, so the billed call was forgotten and the budget could be
+        # exceeded by repeated manual retries.
+        original = self.gh.snapshot
+        state = {"snapshot": 0}
+
+        def flaky_snapshot(*args):
+            state["snapshot"] += 1
+            if state["snapshot"] == 2:
+                raise Blocked("temporary GitHub snapshot failure")
+            return original(*args)
+
+        def generate(issue, files, config, feedback):
+            if not hasattr(generate, "used"):
+                generate.used = True
+                raise UnusableOutput("rejected output")
+            return {"docs/glossary.md": "# Glossary\nPR: pull request. Revision 2.\n"}
+
+        self.agent.generate = generate
+        self.gh.snapshot = flaky_snapshot
+        self.assertEqual(self.tick(), "BLOCKED")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(data["calls"], 1)            # the rejected call was billed
+        self.gh.snapshot = original
+        self.store.retry(1)
+        self.assertEqual(self.tick(), "PUBLISHING")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(data["calls"], 2)            # the spent call is still counted
+
     def test_unusable_output_is_repaired_instead_of_blocking_the_job(self):
         # Regression: real job 2 died "Agent must return a single strict JSON object with
         # files" after publishing PR #13, because every agent error was recorded as an
