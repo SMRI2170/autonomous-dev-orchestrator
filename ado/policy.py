@@ -28,7 +28,7 @@ PROTECTED = re.compile(
     r"(?i)(?:^|/)(?:\.[^/]+|agents\.md|claude\.md|gemini\.md|"
     r".*(?:secret|credential|password|permission|entitlement|auth|security|policy|"
     r"keychain|token|migration|billing|payment|deploy|dockerfile|makefile|"
-    r"package|lock|pubspec|requirements|pyproject|setup|gradle|podfile|gemfile).*)(?:/|$)|"
+    r"package|lock|pubspec|requirements|pyproject|setup\.(?:py|cfg)|gradle|podfile|gemfile).*)(?:/|$)|"
     r"(?i:\.(?:pem|key|p12|pfx|keystore|mobileprovision|sh|bash|zsh|ps1|bat|exe|plist)$)"
 )
 DANGEROUS = re.compile(

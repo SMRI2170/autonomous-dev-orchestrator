@@ -12,8 +12,16 @@ class PolicyTests(unittest.TestCase):
     def test_protected_paths(self):
         for path in [".github/workflows/ci.yml", "docs/../src/a.py", "/tmp/a", "a//b", "a\\b",
                      "docs/.env", "AGENTS.md", "src/auth.py", "pubspec.yaml", "package-lock.json",
-                     "docs/key.pem", "scripts/start.sh", "docs/permissions.md", "docs/Token.md"]:
+                     "docs/key.pem", "scripts/start.sh", "docs/permissions.md", "docs/Token.md",
+                     "setup.py", "app/setup.cfg"]:
             with self.subTest(path=path), self.assertRaises(Blocked):
+                safe_path(path)
+
+    def test_documentation_about_setup_is_not_a_protected_path(self):
+        # Regression: the bare keyword "setup" protected docs/setup.md, so the operator's
+        # own allowlist was silently overridden and the file never reached the model.
+        for path in ["docs/setup.md", "docs/setup.txt", "docs/issue-setup.md"]:
+            with self.subTest(path=path):
                 safe_path(path)
 
     def test_secret_and_dangerous_commands(self):
