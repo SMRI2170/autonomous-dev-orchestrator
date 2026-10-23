@@ -189,6 +189,14 @@ class Engine:
                 if phase == "AWAITING_HUMAN":
                     raise Blocked("Review changed after handoff; human attention required")
                 if data["repairs"] >= self.config["max_repairs"]:
+                    # Every finding left is raised against an earlier head, so the model
+                    # has nothing new to act on: the repair that was just published is
+                    # what the reviewer has to look at. Wait for that human instead of
+                    # blocking the job on a budget it can no longer spend.
+                    if self.stale_only(feedback, data.get("head")):
+                        self.store.event(row["id"], "WAIT", stage="review",
+                                         reasons=["waiting for review threads to be resolved"])
+                        return
                     raise Blocked("Maximum repair attempts reached")
                 self.build(row, data, cfg, issue, feedback, repair=True)
                 return
@@ -250,6 +258,12 @@ class Engine:
         return isinstance(review, dict) and review.get("sha") == data.get("head") and \
             review.get("changes_digest") == digest
 
+    def stale_only(self, feedback, head):
+        """Is every finding raised against a head other than the one being reviewed?"""
+        items = [item for item in feedback if isinstance(item, dict)]
+        return bool(items) and all(item.get("kind") == "thread" and item.get("sha") != head
+                                   for item in items)
+
     def outstanding(self, feedback, head):
         """Is there a finding that applies to the head that is being repaired?
 
@@ -264,19 +278,19 @@ class Engine:
         if data["calls"] >= 1 + self.config["max_repairs"]:
             raise Blocked("Model call budget exhausted")
         parent = data.get("head", data["base"])
+        if repair and not self.outstanding(feedback, parent) and data.get("settled_head") == parent:
+            # This head was already found to have nothing outstanding, and the head has
+            # not moved since. Do not spend another model call to learn the same thing --
+            # and do not charge a call to the budget either: no call is made here.
+            self.activity(row, "settled", reason="no change outstanding at this head")
+            self.store.save(row, "REVIEW", data)
+            return
         self.activity(row, "context")
         files, modes = self.gh.snapshot(row["repo"], parent, cfg)
         data["calls"] += 1
         if repair:
             data["repairs"] += 1
         self.store.save(row, "BUILDING", data)  # reserve budget BEFORE any model invocation
-        if repair and not self.outstanding(feedback, parent) and data.get("settled_head") == parent:
-            # This head was already found to have nothing outstanding, and the head has
-            # not moved since. Do not spend another model call to learn the same thing.
-            data["repairs"] -= 1
-            self.activity(row, "settled", reason="no change outstanding at this head")
-            self.store.save(row, "REVIEW", data)
-            return
         try:
             self.activity(row, "implement", repairing=bool(feedback), file_count=len(files))
             changes = self.agent.generate(issue, files, cfg, feedback)
@@ -304,6 +318,11 @@ class Engine:
             if data["repairs"] >= self.config["max_repairs"]:
                 raise
             self.activity(row, "reject", reason=str(exc))
+            # The call finished, so nothing is in flight. Restore a phase a human can
+            # retry from before the next build does any pre-call work: if that work
+            # fails transiently the job would otherwise be left in BUILDING, which
+            # retry() refuses as an interrupted call that was never interrupted.
+            self.store.save(row, "REVIEW" if data.get("pr") else "QUEUED", data)
             # Carry the original review findings forward. The retry is still working on
             # the same findings; replacing them with the rejection reason alone left the
             # model with no idea what it had been asked to fix.

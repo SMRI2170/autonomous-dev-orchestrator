@@ -9,12 +9,8 @@ from .policy import Blocked, redact
 
 
 class Store:
-    def __init__(self, root, max_repairs=3):
+    def __init__(self, root):
         self.root = Path(root)
-        # The repair budget lives in the configuration. Keeping a second copy of the
-        # number here made a configured budget of 4 unreachable: retry() compared
-        # against the hardcoded 3 and refused to resume a job the engine would allow.
-        self.max_repairs = max_repairs
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         self.db = sqlite3.connect(self.root / "state.sqlite")
@@ -112,8 +108,9 @@ class Store:
         if not row or row["state"] != "BLOCKED":
             raise Blocked("Only an explicitly selected BLOCKED job can be retried")
         data = json.loads(row["data"])
-        if data.get("repairs", 0) >= self.max_repairs:
-            raise Blocked("Repair budget exhausted; create a new, reviewed issue")
+        # The repair budget is the engine's business: only a repair actually spends one.
+        # Refusing here on a counter would make a retry-safe failure -- a transient
+        # publish, evidence or issue-close error -- permanently unrecoverable.
         phase = data.get("resume", "QUEUED")
         # Never replay an agent call after interruption; a human must inspect it.
         if phase in ("BUILDING", "REVIEWING"):

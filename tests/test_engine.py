@@ -163,26 +163,22 @@ class EngineTests(unittest.TestCase):
         self.engine = Engine(self.cfg, self.store, self.gh, self.agent)
         self.assertEqual(self.tick(), "BLOCKED")
         self.assertEqual(self.agent.calls, 4)
-        with self.assertRaises(Blocked):
-            self.store.retry(1)
+        # A retry cannot buy another repair: the engine enforces the budget, so the
+        # job blocks again without spending a model call.
+        self.store.retry(1)
+        self.assertEqual(self.tick(), "BLOCKED")
+        self.assertEqual(self.agent.calls, 4)
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(data["reason"], "Maximum repair attempts reached")
 
-    def test_the_retry_budget_is_the_configured_one(self):
-        # Regression: the store compared against a hardcoded 3 while the engine used the
-        # configured max_repairs. A job configured with 4 could never be resumed, so the
-        # extra round the engine allowed was unreachable.
-        wide = Store(self.temp.name + "-wide", max_repairs=4)
-        row = wide.add("owner/project", 1)
-        wide.save(row, "BLOCKED", {"repairs": 3, "resume": "REVIEW"})
-        wide.retry(row["id"])
-        self.assertEqual(wide.get("owner/project", 1)["state"], "REVIEW")
-        # The default budget still refuses the same job.
-        narrow = Store(self.temp.name + "-narrow")
-        row = narrow.add("owner/project", 1)
-        narrow.save(row, "BLOCKED", {"repairs": 3, "resume": "REVIEW"})
-        with self.assertRaises(Blocked):
-            narrow.retry(row["id"])
-        wide.db.close()
-        narrow.db.close()
+    def test_the_store_does_not_refuse_a_retry_because_of_the_repair_budget(self):
+        # Regression: the store compared the repair counter against a limit of its own,
+        # so once the budget was spent every retry was refused -- including retries of
+        # failures that spend no repair at all, such as a transient publish error.
+        row = self.store.add("owner/project", 1)
+        self.store.save(row, "BLOCKED", {"repairs": 3, "resume": "REVIEW"})
+        self.store.retry(row["id"])
+        self.assertEqual(self.store.get("owner/project", 1)["state"], "REVIEW")
 
     def unusable_agent(self, rejections):
         """Make the next `rejections` calls fail as unusable output, then behave normally."""
@@ -283,6 +279,70 @@ class EngineTests(unittest.TestCase):
                                                     "commit": {"oid": self.gh.head}}]}}]
         self.tick()
         self.assertGreater(len(calls), 2)
+
+    def test_a_settled_head_does_not_spend_the_model_call_budget(self):
+        # Regression: a settled head was charged a call on every poll even though no
+        # model call was made, so the job blocked on the call budget within a few polls.
+        content = "# Glossary\nPR: pull request. Revision 1.\n"
+        calls = []
+
+        def generate(issue, files, config, feedback):
+            calls.append(feedback)
+            return {"docs/glossary.md": content} if len(calls) == 1 else dict(files)
+
+        self.agent.generate = generate
+        self.gh.threads = [{"isResolved": False, "isOutdated": True,
+                            "comments": {"nodes": [{"body": "old finding", "commit": {"oid": "old"}}]}}]
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.tick(), "REVIEW")
+        for _ in range(6):
+            self.assertEqual(self.tick(), "REVIEW")
+        record = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(record["calls"], 2)      # one real call, one rejected retry
+        self.assertEqual(record["repairs"], 0)
+        self.assertEqual(len(calls), 2)
+
+    def test_a_transient_failure_in_the_output_retry_leaves_a_retryable_phase(self):
+        # Regression: the retry after a rejected output did pre-call work (a snapshot)
+        # while the job still sat in BUILDING, so a transient failure there stranded it
+        # in a phase retry() refuses as an interrupted call that was never interrupted.
+        self.agent.generate = Mock(side_effect=UnusableOutput("rejected output"))
+        original = self.gh.snapshot
+        state = {"calls": 0}
+
+        def flaky_snapshot(*args):
+            state["calls"] += 1
+            if state["calls"] == 2:
+                raise Blocked("temporary GitHub snapshot failure")
+            return original(*args)
+
+        self.gh.snapshot = flaky_snapshot
+        self.assertEqual(self.tick(), "BLOCKED")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertNotEqual(data.get("resume"), "BUILDING")
+        self.gh.snapshot = original
+        self.store.retry(1)
+        self.assertIn(self.store.get("owner/project", 1)["state"], ("QUEUED", "REVIEW"))
+
+    def test_stale_findings_wait_for_a_human_once_the_repair_budget_is_spent(self):
+        # Regression: after the last permitted repair, the finding that caused it stays
+        # open against the old head. The job must wait for that human, not block.
+        self.publish()
+        self.gh.review = "FAIL"
+        for _ in range(3):
+            self.assertEqual(self.tick(), "PUBLISHING")
+            self.assertEqual(self.tick(), "REVIEW")
+        head = self.gh.head
+        # The bot is satisfied; only a finding against an earlier head is left.
+        self.gh.review = "PASS"
+        self.gh.threads = [{"isResolved": False, "isOutdated": True,
+                            "comments": {"nodes": [{"body": "old finding", "commit": {"oid": "old"}}]}}]
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "REVIEW")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(self.store.get("owner/project", 1)["state"], "REVIEW")
+        self.assertNotIn("Maximum repair attempts", data.get("reason", ""))
+        self.assertEqual(data.get("head"), head)
 
     def test_unusable_output_is_repaired_instead_of_blocking_the_job(self):
         # Regression: real job 2 died "Agent must return a single strict JSON object with
