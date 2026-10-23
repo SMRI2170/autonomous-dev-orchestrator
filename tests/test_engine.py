@@ -396,7 +396,9 @@ class EngineTests(unittest.TestCase):
         def generate(issue, files, config, feedback):
             if not hasattr(generate, "used"):
                 generate.used = True
+                generate.feedback = feedback
                 raise UnusableOutput("rejected output")
+            generate.resumed = feedback
             return {"docs/glossary.md": "# Glossary\nPR: pull request. Revision 2.\n"}
 
         self.agent.generate = generate
@@ -410,7 +412,42 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.tick(), "PUBLISHING")
         data = json.loads(self.store.get("owner/project", 1)["data"])
         self.assertEqual(data["calls"], 2)            # the spent call is still counted
-        self.assertEqual(data["repairs"], repairs)    # and so is the repair counter
+        self.assertEqual(data["repairs"], repairs + 1)   # the resumed attempt is a repair
+        # The rejection reason survives the resume, so the model is told why.
+        self.assertIn("rejected output", generate.resumed[-1]["body"])
+
+    def test_a_rejection_reason_reaches_the_model_after_a_review_retry(self):
+        # Regression: the reason an answer was rejected was only kept for the immediate
+        # retry. After a manual retry the model saw the review finding again but not the
+        # reason the answer had been rejected, and produced the same unusable answer.
+        self.publish()
+        self.gh.review = "FAIL"
+        original = self.gh.snapshot
+        state = {"n": 0}
+        seen = []
+
+        def flaky_snapshot(*args):
+            state["n"] += 1
+            if state["n"] == 2:
+                raise Blocked("temporary GitHub snapshot failure")
+            return original(*args)
+
+        def generate(issue, files, config, feedback):
+            seen.append(feedback)
+            if len(seen) == 1:
+                raise UnusableOutput("rejected output")
+            return {"docs/glossary.md": "# Glossary\nPR: pull request. Revision 2.\n"}
+
+        self.agent.generate = generate
+        self.gh.snapshot = flaky_snapshot
+        self.assertEqual(self.tick(), "BLOCKED")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(data["output_reason"], "rejected output")
+        self.gh.snapshot = original
+        self.store.retry(1)
+        self.tick()
+        self.assertTrue(any(item.get("body") == "rejected output"
+                            for item in seen[-1] if isinstance(item, dict)))
 
     def test_unusable_output_is_repaired_instead_of_blocking_the_job(self):
         # Regression: real job 2 died "Agent must return a single strict JSON object with

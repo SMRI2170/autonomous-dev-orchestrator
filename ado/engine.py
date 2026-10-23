@@ -137,7 +137,7 @@ class Engine:
                 # counted, or the budget could be exceeded by repeated retries.
                 data.update(base_branch=meta["default_branch"], branch=f"ado/issue-{row['issue']}",
                             repairs=0, calls=0, base=self.gh.branch_head(repo, meta["default_branch"]))
-            self.build(row, data, cfg, issue, data.pop("pending_feedback", []))
+            self.build(row, data, cfg, issue, [], repair=bool(data.get("output_reason")))
         elif phase == "PUBLISHING":
             self.publish(row, data)
         elif phase in ("REVIEW", "AWAITING_HUMAN"):
@@ -314,9 +314,15 @@ class Engine:
             return
         self.activity(row, "context")
         files, modes = self.gh.snapshot(row["repo"], parent, cfg)
+        reason = data.get("output_reason")
+        if reason:
+            # The previous answer was rejected and the reason was not spent yet: the
+            # model has to be told why, whichever attempt comes next.
+            feedback = list(feedback) + [{"kind": "output", "body": reason}]
         data["calls"] += 1
         if repair:
             data["repairs"] += 1
+        data["output_reason"] = None            # the reason is now in the feedback
         self.store.save(row, "BUILDING", data)  # reserve budget BEFORE any model invocation
         try:
             self.activity(row, "implement", repairing=bool(feedback), file_count=len(files))
@@ -345,17 +351,19 @@ class Engine:
             if data["repairs"] >= self.config["max_repairs"]:
                 raise
             self.activity(row, "reject", reason=str(exc))
+            # Remember why the answer was rejected, so the next attempt -- this retry
+            # or a later repair driven by the review -- can tell the model. It is
+            # persisted before the state is restored, so a manual retry finds it too.
+            data["output_reason"] = str(exc)
             # The call finished, so nothing is in flight. Restore a phase a human can
             # retry from before the next build does any pre-call work: if that work
             # fails transiently the job would otherwise be left in BUILDING, which
             # retry() refuses as an interrupted call that was never interrupted.
             self.store.save(row, "REVIEW" if data.get("pr") else "QUEUED", data)
-            data["pending_feedback"] = list(feedback) + [{"kind": "output", "body": str(exc)}]
-            # Carry the original review findings forward. The retry is still working on
-            # the same findings; replacing them with the rejection reason alone left the
-            # model with no idea what it had been asked to fix.
-            self.build(row, data, cfg, issue,
-                       list(feedback) + [{"kind": "output", "body": str(exc)}], repair=True)
+            # The original review findings are carried forward too. The retry is still
+            # working on the same findings; replacing them with the rejection reason
+            # alone left the model with no idea what it had been asked to fix.
+            self.build(row, data, cfg, issue, feedback, repair=True)
             return
         data.update(changes=changes, all_changes=all_changes, parent=parent,
                     date=datetime.now(timezone.utc).isoformat(), intent_sha=None)
