@@ -404,11 +404,13 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.tick(), "BLOCKED")
         data = json.loads(self.store.get("owner/project", 1)["data"])
         self.assertEqual(data["calls"], 1)            # the rejected call was billed
+        repairs = data["repairs"]
         self.gh.snapshot = original
         self.store.retry(1)
         self.assertEqual(self.tick(), "PUBLISHING")
         data = json.loads(self.store.get("owner/project", 1)["data"])
         self.assertEqual(data["calls"], 2)            # the spent call is still counted
+        self.assertEqual(data["repairs"], repairs)    # and so is the repair counter
 
     def test_unusable_output_is_repaired_instead_of_blocking_the_job(self):
         # Regression: real job 2 died "Agent must return a single strict JSON object with
