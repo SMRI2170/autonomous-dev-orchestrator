@@ -45,6 +45,8 @@ cp examples/config.toml config.toml
 
 ライブ運用の手順は[セットアップ](docs/setup.md)、常駐方法は[launchd](docs/launchd.md)、安全条件は[セキュリティ設計](docs/security.md)、動作確認と未実装事項は[検証結果](docs/verification.md)を参照してください。
 
+用語集は[用語集](docs/glossary.md)を参照してください。
+
 ## フローを画面で見る
 
 ```sh
