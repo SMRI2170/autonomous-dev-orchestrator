@@ -302,11 +302,17 @@ class Engine:
         if data["calls"] >= 1 + self.config["max_repairs"]:
             raise Blocked("Model call budget exhausted")
         parent = data.get("head", data["base"])
+        # The review findings and the reason the last answer was rejected are kept apart.
+        # The reason is for the model only: it must not decide what counts as an
+        # outstanding finding, nor change which findings a head was settled against.
+        findings = list(feedback)
+        reason = data.get("output_reason")
+        model_feedback = findings + ([{"kind": "output", "body": reason}] if reason else [])
         settled = data.get("settled") or {}
-        if repair and not self.outstanding(feedback, parent) and \
-                settled.get("head") == parent and settled.get("feedback") == digest(feedback):
-            # This head was already found to have nothing outstanding for exactly this
-            # feedback, and neither the head nor the findings have changed. Do not spend
+        if repair and not self.outstanding(findings, parent) and \
+                settled.get("head") == parent and settled.get("feedback") == digest(findings):
+            # This head was already found to have nothing outstanding for exactly these
+            # findings, and neither the head nor the findings have changed. Do not spend
             # another model call to learn the same thing -- and do not charge a call to
             # the budget either: no call is made here.
             self.activity(row, "settled", reason="no change outstanding at this head")
@@ -314,27 +320,22 @@ class Engine:
             return
         self.activity(row, "context")
         files, modes = self.gh.snapshot(row["repo"], parent, cfg)
-        reason = data.get("output_reason")
-        if reason:
-            # The previous answer was rejected and the reason was not spent yet: the
-            # model has to be told why, whichever attempt comes next.
-            feedback = list(feedback) + [{"kind": "output", "body": reason}]
         data["calls"] += 1
         if repair:
             data["repairs"] += 1
         data["output_reason"] = None            # the reason is now in the feedback
         self.store.save(row, "BUILDING", data)  # reserve budget BEFORE any model invocation
         try:
-            self.activity(row, "implement", repairing=bool(feedback), file_count=len(files))
-            changes = self.agent.generate(issue, files, cfg, feedback)
-            if repair and not self.outstanding(feedback, parent) and \
+            self.activity(row, "implement", repairing=bool(model_feedback), file_count=len(files))
+            changes = self.agent.generate(issue, files, cfg, model_feedback)
+            if repair and not self.outstanding(findings, parent) and \
                     self.unchanged(changes, cfg, files):
                 # Every outstanding finding was raised against an earlier head and the
                 # current head already answers it, so the model had nothing to change.
                 # Publishing a no-op is forbidden; waiting for a human to resolve the stale
                 # threads is the correct outcome, and it must not cost a repair attempt.
                 data["repairs"] -= 1
-                data["settled"] = {"head": parent, "feedback": digest(feedback)}
+                data["settled"] = {"head": parent, "feedback": digest(findings)}
                 self.activity(row, "settled", reason="no change outstanding at this head")
                 self.store.save(row, "REVIEW", data)
                 return

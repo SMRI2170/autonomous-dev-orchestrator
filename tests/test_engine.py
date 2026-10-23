@@ -3,7 +3,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import Mock, patch
-from ado.engine import Engine
+from ado.engine import Engine, digest
 from ado.policy import Blocked, UnusableOutput
 from ado.state import Store
 from tests.fakes import Agent, GitHub, config, issue
@@ -448,6 +448,39 @@ class EngineTests(unittest.TestCase):
         self.tick()
         self.assertTrue(any(item.get("body") == "rejected output"
                             for item in seen[-1] if isinstance(item, dict)))
+
+    def test_a_rejection_reason_does_not_change_what_counts_as_outstanding(self):
+        # Regression: the reason an answer was rejected was appended to the same list
+        # the outstanding check and the settled digest were computed from, so a job
+        # that only had stale findings could never settle while a reason was pending.
+        content = "# Glossary\nPR: pull request. Revision 1.\n"
+        seen = []
+
+        def generate(issue, files, config, feedback):
+            seen.append(feedback)
+            if len(seen) == 2:
+                raise UnusableOutput("rejected output")
+            return {"docs/glossary.md": content}          # the same as the snapshot
+
+        self.agent.generate = generate
+        self.gh.threads = [{"isResolved": False, "isOutdated": True,
+                            "comments": {"nodes": [{"body": "old finding", "commit": {"oid": "old"}}]}}]
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "REVIEW")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        # The model was told why its answer was refused.
+        self.assertTrue(any(item.get("kind") == "output" for item in seen[-1]))
+        # The head was settled against the findings alone: the reason is not in it.
+        settled = data.get("settled") or {}
+        self.assertTrue(settled)
+        findings = [{"kind": "thread", "body": "old finding", "sha": "old"}]
+        self.assertEqual(settled["feedback"], digest(findings))
+        self.assertNotEqual(settled["feedback"], digest(findings + [{"kind": "output",
+                                                                      "body": "rejected output"}]))
+        # And a reason on its own is not a finding about the head.
+        self.assertFalse(self.engine.outstanding(
+            [{"kind": "thread", "body": "old finding", "sha": "old"}], "head"))
 
     def test_unusable_output_is_repaired_instead_of_blocking_the_job(self):
         # Regression: real job 2 died "Agent must return a single strict JSON object with
