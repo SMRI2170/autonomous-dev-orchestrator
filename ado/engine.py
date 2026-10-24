@@ -328,12 +328,15 @@ class Engine:
         try:
             self.activity(row, "implement", repairing=bool(model_feedback), file_count=len(files))
             changes = self.agent.generate(issue, files, cfg, model_feedback)
-            if repair and not self.outstanding(findings, parent) and \
+            if repair and data.get("pr") and not self.outstanding(findings, parent) and \
                     self.unchanged(changes, cfg, files):
                 # Every outstanding finding was raised against an earlier head and the
                 # current head already answers it, so the model had nothing to change.
                 # Publishing a no-op is forbidden; waiting for a human to resolve the stale
                 # threads is the correct outcome, and it must not cost a repair attempt.
+                # This only applies to a job that already published a pull request: before
+                # that, an answer that changes nothing is a refusal, and it is rejected as
+                # such rather than leaving a job with no pull request behind.
                 data["repairs"] -= 1
                 data["settled"] = {"head": parent, "feedback": digest(findings)}
                 self.activity(row, "settled", reason="no change outstanding at this head")

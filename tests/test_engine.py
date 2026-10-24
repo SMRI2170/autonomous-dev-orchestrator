@@ -482,6 +482,18 @@ class EngineTests(unittest.TestCase):
         self.assertFalse(self.engine.outstanding(
             [{"kind": "thread", "body": "old finding", "sha": "old"}], "head"))
 
+    def test_an_unchanged_first_answer_is_rejected_rather_than_settled(self):
+        # Regression: the no-op shortcut applied before a pull request existed, so a
+        # first answer that changed nothing left the job in REVIEW with no pull request
+        # behind it. An answer that changes nothing is a refusal until a PR exists.
+        self.gh.files = {"docs/glossary.md": "# Glossary\n"}
+        self.agent.generate = lambda issue, files, config, feedback: {"docs/glossary.md": "# Glossary\n"}
+        self.assertEqual(self.tick(), "BLOCKED")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(data.get("settled"), None)
+        self.assertIn("Unchanged file", data.get("reason", ""))
+        self.assertNotEqual(self.store.get("owner/project", 1)["state"], "REVIEW")
+
     def test_unusable_output_is_repaired_instead_of_blocking_the_job(self):
         # Regression: real job 2 died "Agent must return a single strict JSON object with
         # files" after publishing PR #13, because every agent error was recorded as an
