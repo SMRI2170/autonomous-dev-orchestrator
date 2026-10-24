@@ -131,12 +131,19 @@ class Engine:
         issue = self.current_issue(row, cfg, data)
         if phase == "QUEUED":
             meta = self.gh.metadata(repo)
-            if "base" not in data:
+            if "repairs" not in data:
                 # A fresh job. A job that comes back to QUEUED after a rejected output
                 # keeps its counters: the call that was already billed must stay
                 # counted, or the budget could be exceeded by repeated retries.
-                data.update(base_branch=meta["default_branch"], branch=f"ado/issue-{row['issue']}",
-                            repairs=0, calls=0, base=self.gh.branch_head(repo, meta["default_branch"]))
+                data.update(repairs=0, calls=0)
+            # The base is the current main, not the one this job happened to start
+            # with. A job in this phase has published nothing, so there is nothing to
+            # keep consistent with an older base -- and a stale one is worse than
+            # useless: the change is built on it, and if main moved on in the
+            # meantime the pull request conflicts with the branch it targets, which no
+            # repair can undo because the change is bound to the head the job made.
+            data.update(base_branch=meta["default_branch"], branch=f"ado/issue-{row['issue']}",
+                        base=self.gh.branch_head(repo, meta["default_branch"]))
             self.build(row, data, cfg, issue, [], repair=bool(data.get("output_reason")))
         elif phase == "PUBLISHING":
             self.publish(row, data)
