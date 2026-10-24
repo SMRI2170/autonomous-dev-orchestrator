@@ -267,6 +267,8 @@ class Engine:
         must never be replayed, while a completed one is spent either way.
         """
         try:
+            if isinstance(changes, dict) and not changes:
+                raise Blocked("Model refused the work (no changes were proposed)")
             validate_changes(changes, cfg, files)
             for path in changes:
                 parts = path.split("/")
@@ -277,9 +279,10 @@ class Engine:
                     if i < len(parts) and mode == "100644":
                         raise Blocked("File used as parent directory")
             all_changes = {**data.get("all_changes", {}), **changes}
-            if len(all_changes) > cfg.get("max_files", 5) or \
-                    sum(len(v.encode()) for v in all_changes.values()) > cfg.get("max_change_bytes", 50000):
-                raise Blocked("Cumulative change budget exceeded")
+            if len(all_changes) > cfg.get("max_files", 5):
+                raise Blocked("Empty/oversized change set")
+            if sum(len(v.encode()) for v in all_changes.values()) > cfg.get("max_change_bytes", 50000):
+                raise Blocked("Change byte budget exceeded")
         except UnicodeEncodeError as exc:
             # A value that cannot be encoded as UTF-8 -- a lone surrogate in a JSON
             # string, say -- can never be committed. The call completed, so this is a
