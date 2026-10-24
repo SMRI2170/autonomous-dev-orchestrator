@@ -75,7 +75,24 @@ class ReviewTests(unittest.TestCase):
         decision, feedback = judge(self.pr, self.ev, self.cfg)
         self.assertEqual(decision, "REPAIR")
         self.assertEqual(feedback, [{"kind": "thread", "body": "still broken", "sha": "old",
-                                     "id": "thread-1"}])
+                                     "id": "thread-1", "path": None, "line": None}])
+
+    def test_a_finding_carries_the_place_it_refers_to(self):
+        # A thread that says "this is wrong" is of little use to the model without the
+        # file and the line it is about. For a thread raised against an earlier head the
+        # current line is null, so the original line is what it referred to.
+        self.ev["threads"] = [{"id": "thread-1", "isResolved": False, "isOutdated": False,
+                                "path": "ado/engine.py", "line": 42, "originalLine": 7,
+                                "comments": {"nodes": [{"body": "fix this", "commit": {"oid": "head"}}]}}]
+        decision, feedback = judge(self.pr, self.ev, self.cfg)
+        self.assertEqual(decision, "REPAIR")
+        self.assertEqual(feedback[0]["path"], "ado/engine.py")
+        self.assertEqual(feedback[0]["line"], 42)
+        # An outdated thread keeps the line it was raised against.
+        self.ev["threads"][0].update(isOutdated=True, line=None)
+        decision, feedback = judge(self.pr, self.ev, self.cfg)
+        self.assertEqual(decision, "REPAIR")
+        self.assertEqual(feedback[0]["line"], 7)
 
     def test_a_stale_finding_still_blocks_a_pass(self):
         self.ev["threads"] = [{"isResolved": False, "isOutdated": True,
@@ -94,7 +111,7 @@ class ReviewTests(unittest.TestCase):
         decision, feedback = judge(self.pr, self.ev, self.cfg)
         self.assertEqual(decision, "REPAIR")
         self.assertEqual(feedback, [{"kind": "thread", "body": "fix this", "sha": None,
-                                     "id": "thread-1"}])
+                                     "id": "thread-1", "path": None, "line": None}])
 
     def test_human_changes_requested_remains_veto(self):
         self.ev["reviews"].append({"id": 2, "user": {"login": "human", "type": "User"},

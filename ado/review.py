@@ -106,15 +106,23 @@ def judge(pr, evidence, config, minimax_review=None, changes_digest=None):
         # different lines -- so the text alone cannot tell a new finding from one that
         # has already been evaluated against this head.
         identity = thread.get("id")
+        # Where the finding is. A thread about "this is wrong" is of little use to the
+        # model without the file and the line it refers to. For an outdated thread the
+        # current line is null and the original line is what it referred to.
+        where = {"path": thread.get("path")}
+        line = thread.get("line")
+        if line is None:
+            line = thread.get("originalLine")
+        where["line"] = line
         if not thread["isOutdated"] and thread_sha == sha:
-            feedback.append({"kind": "thread", "body": body, "sha": sha, "id": identity})
+            feedback.append({"kind": "thread", "body": body, "sha": sha, "id": identity, **where})
         else:
             # The finding was raised against an earlier head, but it is still unresolved
             # and the change it refers to may well survive in the current head. Leaving it
             # out of the feedback silently dropped the finding: the model was never told
             # about it, so the repair loop could not converge and the job stalled. Feed it
             # back, and keep blocking PASS until a human resolves the thread.
-            feedback.append({"kind": "thread", "body": body, "sha": thread_sha, "id": identity})
+            feedback.append({"kind": "thread", "body": body, "sha": thread_sha, "id": identity, **where})
             waiting.append("unresolved old review thread")
     # Never repair while a required check is still running/missing: avoid burning retries.
     if any(x.startswith(("missing CI", "running CI")) for x in waiting):

@@ -474,7 +474,8 @@ class EngineTests(unittest.TestCase):
         # The head was settled against the findings alone: the reason is not in it.
         settled = data.get("settled") or {}
         self.assertTrue(settled)
-        findings = [{"kind": "thread", "body": "old finding", "sha": "old", "id": "thread-1"}]
+        findings = [{"kind": "thread", "body": "old finding", "sha": "old", "id": "thread-1",
+                     "path": None, "line": None}]
         self.assertEqual(settled["feedback"], digest(findings))
         self.assertNotEqual(settled["feedback"], digest(findings + [{"kind": "output",
                                                                       "body": "rejected output"}]))
@@ -623,6 +624,9 @@ class EngineTests(unittest.TestCase):
         self.gh.threads = [thread("first"), thread("second"), thread("third")]
         self.assertEqual(self.tick(), "REVIEW")
         self.assertEqual(len(calls), 3)
+        # And it is the third thread that reached the model, not some other one.
+        self.assertTrue(any(item.get("id") == "third"
+                            for item in calls[2] if isinstance(item, dict)))
 
     def test_unusable_output_is_repaired_instead_of_blocking_the_job(self):
         # Regression: real job 2 died "Agent must return a single strict JSON object with
