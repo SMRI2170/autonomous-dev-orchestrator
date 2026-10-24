@@ -7,7 +7,7 @@
 `dry_run = false` で実サービスに接続し、Issue #18 から実PRの修正ループを最後まで一周させました。fixtureは使っていません。**Issue → 実MiniMax生成 → 実commit → 実branch → 実PR → CI → MiniMaxレビュー → 外部レビュー → PASS → AWAITING_HUMAN（人手マージ待ち）** まで到達し、修正は0回でした。自動マージは行っていません。
 
 - 実MiniMaxが 38,813 bytes のプロンプトで `docs/operator-runbook.md` を生成し、`validate_changes` を通って実commit `ea4b07cc`・実branch `ado/issue-12`・実PR #13 が作成されました。
-- CI成功後、`judge()` がSHAに紐づく証拠（check-run / review / GraphQL review thread）を評価しREPAIRを返しました。指摘はADO自身のGraphQLクエリで取得できたことを確認しています。
+- CI成功後、`judge()` がSHAに紐づく証拠（check-run / review / GraphQL review thread）を評価しREPAIRを返しました。指摘はADO自身のGraphQLクエリで取得できていることを確認しています。
 - REPAIRで再生成し、新head `86c30852f1ce` でCI成功まで到達しました。
 - `auto_merge` はグローバルとリポジトリの両方で `false` のままです。MiniMaxの自己reviewが自動マージを許可しないことはコードで保証されています。
 - heartbeatは実MiniMax呼出し中に `worker.json` が48.6秒進み、経過0.1秒でした。
@@ -25,13 +25,13 @@
 ### MiniMaxレビューの実サービス動作（Issue #16 / PR #17）
 
 - 実MiniMaxレビューが 처음으로実サービス上で走りました。`5d50e9429` に対する判定は `APPROVE`（指摘0件）で、head SHA と変更内容のdigestの両方に束縛された記録として保存されました。
-- Codexの指摘2件（check-runを検査実行の記録と定義する／dry-runでもローカル状態は記録する）を頭から直した `d3cd43b5a` に対し、同じMiniMaxレビューが `REQUEST_CHANGES` を返し、`dry-run` の説明が1文に収まっていないという受入条件違反を指摘しました。指摘は次の修復入力としてモデルに渡されます。
-- レビューは2回目で200秒近くかかりました。heartbeatは露出一らず、呼び出しは正常に完了しました。応答時間の分布は未計測です。
+- Codexの指摘2件（check-runを検査実行の記録と定義する／dry-runでもローカル状態は記録する）を頭から直した `d3cd43b5a` に対し、同じMiniMaxレビューは `REQUEST_CHANGES` を返し、`dry-run` の説明が1文に収まっていないという受入条件違反を指摘しました。指摘は次の修復入力としてモデルに渡されます。
+- レビューは2回目で200秒近くかかりました。heartbeatは，露出せず、呼び出しは正常に完了しました。応答時間の分布は未計測です。
 
 ### 実サービスで見つかった不具合（8件）
 
 1. **入力検査と出力検査が同一だった。** 本リポジトリ自身の `docs/verification.md` が `subprocess.run` という語を含むため、コンテキスト読み取りが拒否してジョブを開始できませんでした。入力側を `inspect_source`（機密のみ拒否）に分離し、出力側の `inspect_text` はより厳しいまま残しました。回帰テスト2件を追加し、3つの変異（入力側を `inspect_text` に戻す・出力側から危険語を削る・入力側から機密検査を削る）で検査が機能することを確認しています。
-2. **Issue #11 の受入条件が満たせなかった。** 条件が `engine.py` の全reason文字列を要求していますが、`engine.py` は `allowed_paths` にも `context_paths` にもないためモデルから見えません。モデルは `{"files":{}}` を返し、これは `Blocked("Empty/oversized change set")` として報告されました。#11 に説明コメントを付けて閉じ、`docs/architecture.md` の状態表だけを根拠にした #12 を作り直しました。
+2. **Issue #11 の受入条件が満たせなかった。** 条件が `engine.py` の全reason文字列を要求していますが、`engine.py` は `allowed_paths` にも `context_paths` にもないためモデルから見ません。モデルは `{"files":{}}` を返し、これは `Blocked("Empty/oversized change set")` として報告されました。#11 に説明コメントを付けて閉じ、`docs/architecture.md` の状態表だけを根拠にした #12 を作り直しました。
 3. **完了した呼び出しの不正出力が終端だった。** strict JSON に違反した出力（2件目）が `resume="BUILDING"` により「中断」扱いとなり、ジョブは二度と復帰せず、公開済みのPR #13 の作業も捨てられていました。`UnusableOutput(Blocked)` を導入し「呼び出しは完了したが使えない出力」と「中断」を区別しました。中断は従来どおり再生禁止のまま、完了した出力だけが修復予算を1回消費して自動再試行します。
 4. **出力の再試行でレビュー指摘を落としていた。** 上記3の自動再試行は、理由だけをモデルに渡し、元のレビュー指摘を捨てていました。実ジョブ3で、修正すべき内容をモデルが知らされずに再生成されることを確認しました。指摘を先頭に、拒否理由を末尾に足して渡し直します。
 5. **旧headの指摘が修正入力から消えていた。** `judge()` は未解決スレッドが現在のSHA以外でraisedされていると `unresolved old review thread` としてWAIT扱いだけにし、修復入力には入れていませんでした。実ジョブ3で、Codex/CodeRabbitが最初のheadに付けた指摘がモデルに一度も渡らず、修正が永久に進まないことを確認しました。古い指摘も修復入力に含め、PASSは引き続き人がスレッドを解決するまで出さないようにしました。
@@ -47,7 +47,7 @@
 - 不正出力の自動再試行が、再試行の事前処理中に失敗するとジョブを `BUILDING` に残し、`retry()` が「中断した呼出し」として拒否した。完了した呼出しのあとで再試行可能な工程に復帰するように。
 - ストアが修復予算を固定値3としか比較しておらず、修復予算を使わない失敗（publishや証拠取得の一時失敗）が再試行不能になっていた。予算の判断はエンジン側へ移動。
 - 修復上限に達したあと、旧headの指摘だけが残ると `REPAIR` の判定でジョブが即座にBLOCKEDになり、人がスレッドを解決する余地がなかった。旧headの指摘だけなら待機する。
-- 解決済みのheadと結びつけたのがheadのSHAだけだったため、同じheadに後から届いた指摘がモデルに渡らず、ジョブが期限まで待った。解決時の指摘のdigestも 함께記録。
+- 解決済みのheadと結びつけたのがheadのSHAだけだったため、同じheadに後から届いた指摘がモデルに渡らず、ジョブが期限まで待った。解決時の指摘のdigestも一緒に記録。
 - 「変更なし」と判定する前に変更内容そのものを検査しておらず、値がnullの不正な応答が「変更なし」と判定されてheadが解決済みになっていた。パスと値の型を先に検査。
 - GraphQLの `commit` がnullのスレッド（force pushで参照先が消えた場合）で `AttributeError` になり `judge()` が落ちていた。nullを空辞書として扱う。
 - 再開したジョブの予算がリセットされ、課金済みの呼出しを数えずに予算の枠を超える可能性があった。再開時にカウンタを保持。
@@ -70,11 +70,11 @@ PR #20 には外部レビューが複数回血脂する。ここに書いたも�
 - Issue #12 のジョブは修復上限（3）に達し `resume="BUILDING"` でBLOCKEDになりました。PR #13 は head `86c30852f1ce` でopen のまま、Codex/CodeRabbit の未解決スレッドが残っています。自動マージは行いません。
 - Issue #14 のジョブ（PR #15）も修復上限に達し、head `3865ec369` でBLOCKEDです。3回目の修復で引用元の誤りはすべて直りましたが、Codex/CodeRabbitの指摘のうち「PRの略語を展開する」「人間確認が条件付きである」「項目間に空行入れる」は、5の不具合でモデルに届いていませんでした。
 - `judge()` の不具合を直した後も、ジョブ3は修復予算（3回）と呼出し予算（4回）を使い切っているため再実行できません。同じ内容を明示的に書いた新Issue #16を作り、予算のある新しいジョブで作り直します。
-- Issue #16 のジョブ（PR #17）は4回の修復で head `5d50e9429` → `d3cd43b5a` → `f8d3151bc` → `b6c238eed` と進み、MiniMaxレビューは `APPROVE` のあと2回目で `REQUEST_CHANGES`（dry-runの説明が1文に収まっていない）を返し、その指摘は次の修復入力に入りました。Codexの2件（dry-runでもローカルに書き込む／check-runは検査実行の記録）も直りましたが、Codexが次のheadに付けた2件（自動マージが有効でも低リスク条件を満たさない場合は人間確認が要る／review threadと未解決スレッドの区別）は残りました。修復上限（3）に達してBLOCKEDです。
+- Issue #16 のジョブ（PR #17）は4回の修復で head `5d50e9429` → `d3cd43b5a` → `f8d3151bc` → `b6c238eed` と進み、MiniMaxレビューは `APPROVE` のあと2回目で `REQUEST_CHANGES`（dry-runの説明が1文に収まっていない）を返し、その指摘は次の修復入力に入りました。Codexの2件（dry-runでもローカルに書き込む／check-runは検査実行の記録）も直しましたが、Codexが次のheadに付けた2件（自動マージが有効でも低リスク条件を満たさない場合は人間確認が要る／review threadと未解決スレッドの区別）は残りました。修復上限（3）に達してBLOCKEDです。
 - 残った2件は未修正なので、解決済と偽ってスレッドを閉じることはしません。製品が設計した復旧手順どおり、2件を反映した新Issue #18 を作り、予算のある新しいジョブで作り直します。
 - `Store.retry()` が修復予算をストア内で固定値3としか比較しておらず、設定値（`max_repairs`、上限0〜3）と食い違っていました。上限を3未満にした設定では、エンジンなら許す再試行をストアが拒否していました。予算の判断はエンジン側に一本化し、ストアは予算を持ちません。
 - CIのcheck-runが `in_progress` のまま完了せず `timeout-minutes` を超えることがありました（全11ステップがsuccessで `Complete job` まで到達）。`gh run rerun` で解消し、`judge()` の最新check-run優先の設計が実データで機能しました。原因はまだ特定できていません。
-- `docs/verification.md` の「LaunchAgentのOS登録・起動はしていません」という記述は、2026-10-24時点の `local.ado.worker`（OSに登録済みで稼働中、`dry_run = true`、`auto_merge = false`、対象は `SMRI2170/animal-shadow-match`）と一致しません。元のジョブ（8）は出力検査の緩和 전에予算を使い切って再開不能なので、[Issue #26](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/26) として作り直しました。実装待ちです。
+- `docs/verification.md` の2026-10-18時点の「LaunchAgentのOS登録・起動はしていません」という記述は、2026-10-24時点の `local.ado.worker`（OSに登録済みで稼働中、`dry_run = true`、`auto_merge = false`、対象は `SMRI2170/animal-shadow-match`）と一致しません。本文末尾の2026-10-24付の訂正で、実際の登録状態、起動コマンド、設定内容を追記済みです。元のジョブ（8）は出力検査の緩和前に予算を使い切って再開不能なので、[Issue #26](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/26) として作り直しました。
 
 ### 運用者が介入した操作（PR #15 / PR #17）
 
@@ -86,7 +86,7 @@ PR #20 には外部レビューが複数回血脂する。ここに書いたも�
 ### 未解決・既知の限界
 
 - `{"files":{}}` というモデルの明示的な拒否が、不正なJSONと同じ `Empty/oversized change set` として報告されます。2026-10-24 に [Issue #25](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/25) として起票しました。新しい予算つきのジョブでの実装待ちです。
-- `MiniMaxReviewer.review()` の出力不備も `REVIEWING` に残って再生不能です。2026-10-24 に [Issue #24](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/24) として起票しました（1回だけ再試行する方針）。無制限に再試行すると1ポーリングごとに新しいモデル呼出しが発生し、利用量に上限がないため、再試行は1回に 제한します。
+- `MiniMaxReviewer.review()` の出力不備も `REVIEWING` に残って再生不能です。2026-10-24 に [Issue #24](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/24) として起票しました（1回だけ再試行する方針）。無制限に再試行すると1ポーリングごとに新しいモデル呼出しが発生し、利用量に上限がないため、再試行は1回に制限します。
 - 15秒を超えるGitHubリクエストでのダッシュボード表示は依然として未実施です（上記2026-10-22節を参照）。
 - `snapshot()` は保護パス判定を CONTEXT にも適用するため、`docs/security.md` はモデルコンテキストから永久に除外されます。これは意図どおりです。
 - 未解決の指摘がすべて旧SHAのスレッドだけだと、修正すべきものが無いので実装は「変更なし」になります。実装には「変更なし」を示す手段がありませんので、1回だけ実装させて同内容を確認し、以降はそのheadでは実装し直させないようにしました。その間、人はスレッドを解決するまで待つことになります。
@@ -98,7 +98,7 @@ PR #20 には外部レビューが複数回血脂する。ここに書いたも�
 
 ## 2026-10-24 MiniMax M3 による実装ループ（Issue #24 / #25 / #26、PR #28）
 
-PR #20 を main に merge したあと（merge commit `82cb7c25`）、書き込み対象を実装ファイル（`ado/*.py` と `tests/test_issue*.py`）まで広げ、Issue #24 / #25 / #26 を起票して MiniMax M3 に実装させました。モデルが実装し、Codex / CodeRabbit と製品自身の MiniMax レビューがゲートし、人が merge する loop です。自動マージは使っていません。
+PR #20 を main に merge したあと（merge commit `82cb7c25`）、書き込み対象を実装ファイル（`ado/*.py` と `tests/test_issue*.py`）まで広げ、Issue #24 / #25 / #26 を起票して MiniMax M3 に実装させました。モデルが実装し、Codex / CodeRabbit と製品自身の MiniMax レビューがゲートし、人が merge する loopです。自動マージは使っていません。
 
 ### 実サービスで見つかった不具合（2件）
 
@@ -118,7 +118,7 @@ PR #20 を main に merge したあと（merge commit `82cb7c25`）、書き込�
 
 ### 指摘と対処
 
-- `GitHub.api()`が`subprocess.run(..., timeout=45)`でブロックし`pulse`を呼ばないため、ダッシュボードの15秒ウィンドウを超えるリクエストでは稼働中のworkerが最大約45秒 offline と表示されていた。selectorのループを`ado/process.py`へ移し`drain()`と`run()`に分離して両トランスポートで共有。GitHub側は独自の出力上限8,000,000バイト（ミニマixedの2,000,000ではない）を持つため、ページ分割された証拠を拒否しない。
+- `GitHub.api()`が`subprocess.run(..., timeout=45)`でブロックし、`pulse`を呼ばないため、`worker.json`の15秒ウィンドウを超えるリクエストでは稼働中のworkerが最大約45秒 offline と表示されていた。selectorのループを`ado/process.py`へ移し、`drain()`と`run()`に分離して両トランスポートで共有。GitHub側は独自の出力上限8,000,000バイト（ミニマixedの2,000,000ではない）を持つため、ページ分割された証拠を拒否しない。
 - 呼び出し側が重複して持っていたPopen・期限待ち・プロセス群SIGKILL・回収・ストリームクローズを`run()`が一本化して持つようになった。例外時に呼び出し側が後始末を忘れる経路がなくなるため、MiniMax側の`finally`ブロックは削除できた。
 - `test_transport_does_not_leak_failure_body`が`subprocess.run`をpatchしていたが、トランスポートはその関数を使わなくなったため、実`gh`を起動して実ネットワーク応答に対して通過していた。テスト対象をトランスポート自身の接合点に差し替え、`tests/test_process.py`で「出力を伴って失敗するプロセスの出力がBlockedメッセージに入らないこと」を直接検証。
 
@@ -144,14 +144,14 @@ PR #20 を main に merge したあと（merge commit `82cb7c25`）、書き込�
 - `ado doctor`のhelpプローブ出力が無制限だった。`generate`と同じ、stdoutとstderrの合計2,000,000バイトの上限とプロセスグループ停止を共有ヘルパー`drain()`に統一し、`while(true)`で書き続けるCLIでも停止することをNode fixtureで実証。
 - `docs/setup.md`と`examples/config.toml`で`entry`がソースビルドの`dist/cli.js`固定だった。npm版とソースビルド版の対応表を追加し、`runtime_root`とのずれがdoctorで失敗する旨を明記。
 - 履歴ベースの工程上書きに`REVIEWING`が含まれ、レビュアー呼び出し直前の`checks`イベントが勝って、レビューに時間がかかるあいだCIの工程と表示されていた。`REVIEWING`を上書き対象から外し、`Engine.step`は`REVIEWING`を保存する前にreview工程のイベントを記録。
-- heartbeatスレッドを残したままだと`Popen(preexec_fn=...)`のforkでCPythonが警告する危険があり、`Popen`が返らない間に子プロセスの停止も期限も機能しない。スレッドを廃止し、長時間呼出しは自前のI/Oループの`pulse`から、`Store.touch()`と`Store.idle()`から生存通知を出す形に変更。
+- heartbeatスレッドを残したままだと`Popen(preexec_fn=...)`のforkでCPythonが警告する危険があり、CPythonは`Popen`が返らない間に子プロセスの停止も期限も機能しない。スレッドを廃止し、長時間呼出しは自前のI/Oループの`pulse`から、`Store.touch()`と`Store.idle()`から生存通知を出す形に変更。
 - スレッド廃止で次のポーリングまでの間に`worker.json`が更新されず、稼働中のworkerが15秒後にofflineと表示された。`ado/cli.py`の`time.sleep`を`Store.idle()`に置き換えた。
 - `Store.idle()`のテストが待ち終わった後に一度だけ読んでおり、待ちの最後にだけheartbeatする退行でも通っていた。待ちの終わりから十分前の観測値に対して検証する形に修正し、終端時のみの`touch()`に戻すと失敗することを確認。
 
 ### 未検証
 
 - ブラウザによるキーボード操作とフォーカス復帰の実操作確認は未実施です。JSにはCIの自動テストがなく、PythonのテストはマーカーとHTTP応答までを確認します。
-- 上記helper`drain()`は`selectors.DefaultSelector`でstdin/stdout/stderrを同一スレッドがまとめて読み書きし、期限超過と合計出力上限の超過を検出します。プロセス群へのSIGKILLと回収は`drain()`ではなく、それを呼び出す`doctor`と`generate`の各`finally`が行います。readerスレッドは存在しないため、旧形式のように停止シグナルが届かない経路はありません。以前の実装（readerスレッドがSIGKILLを送り主スレッドの`finally`が回収を担保する形式）では15秒タイムアウトが1回だけ観測されましたが、現行形式では10回連続で再現せず、原因は特定できていません。旧形式での初回観測の記録であり、現行実装の不具合としては再現していません。
+- 上記helper`drain()`は`selectors.DefaultSelector`でstdin/stdout/stderrを同一スレッドでまとめて読み書きし、期限超過と合計出力上限の超過を検出します。プロセス群へのSIGKILLと回収は`drain()`ではなく、それを呼び出す`doctor`と`generate`の各`finally`が行います。readerスレッドは存在しないため、旧形式のように停止シグナルが届かない経路はありません。以前の実装（readerスレッドがSIGKILLを送り主スレッドの`finally`が回収を担保する形式）では15秒タイムアウトが1回だけ観測されましたが、現行形式では10回連続で再現せず、原因は特定できていません。旧形式での初回観測の記録であり、現行実装の不具合としては再現していません。
 - 上記のlivenessはMiniMaxの呼出しのみを対象としています。`GitHub.api()`は`subprocess.run(..., timeout=45)`で、待機中は`pulse`を呼ばないため、GitHubリクエストが15秒を超えると稼働中のworkerがofflineと表示されることがあります（最大で約45秒）。2026-10-22に修正（上記参照）。
 
 ## 2026-10-20 追加検証
@@ -166,8 +166,8 @@ PR #20 を main に merge したあと（merge commit `82cb7c25`）、書き込�
 - 0.6.9の既定モデル`MiniMax-M3.1-Flash-Preview`がmanaged token planの一覧に存在しない問題を確認。既存profileと同じMiniMax-M3を選択し、実モデルの応答を取得。
 - 従来の`RLIMIT_FSIZE=2MB`がCLIのSQLite WALやモデルカタログにも適用されるため失敗する問題を確認。stdout/stderrをそれぞれ2MBに制限する収集処理へ変更し、超過時にプロセス群を停止。実sandboxテストで2MB超のprofileファイル書込み、stdout/stderr超過時の拒否を確認。
 - productionのMiniMaxアダプターで`docs/ado-glossary.md`の変更JSONを生成し、`validate_changes`で合格。GitHubへは公開せず、生成結果はローカルの非公開stateに保存。実PRのモデル修正ループは未検証。
-- GitHub本人確認後、ブラウザでCodeRabbit AppがAll repositoriesに導入済みであることを確認。CodeRabbitの一覧エラーはセッション切れであり、本人の再ログイン後に本リポジトリのInstalled表示とレビュー設定画面の表示に成功。
-- 既存[PR #6](https://github.com/SMRI2170/autonomous-dev-orchestrator/pull/6)のhead `89e50d143dc7ea80fa7616cfb2be072c60ccce5c`について、productionのGitHub/evidence/judgeで実サービスの証拠を評価。現在SHAへのCodeRabbit Botの正式APPROVED、`checks / unit`成功、未解決スレッド0、mergeable cleanによりPASS。読み取りのみで、マージは未実施。このPRには別途進められていた追加実装も含まれ、本ローカル作業の変更が公開済みという意味ではない。
+- GitHub本人確認後、ブラウザでCodeRabbit AppがAll repositoriesに導入済みであることを確認。CodeRabbitの一覧エラーはセッション切れであり、本人の再ログイン後に本リポジトリのInstalled表示とレビュー設定画面にアクセスできることを確認。
+- 既存[PR #6](https://github.com/SMRI2170/autonomous-dev-orchestrator/pull/6)のhead `89e50d143dc7ea80fa7616cfb2be072c60ccce5c`について、productionのGitHub/evidence/judgeで実サービスの証拠を評価。現在SHAへのCodeRabbit Botの正式APPROVED、`checks / unit`成功、未解決スレッド0、mergeable cleanによりPASS。読み取りのみで、マージは未実施。このPRには別途進められていた追加実装も含まれ、このローカル作業の変更が公開済みという意味ではない。
 - 既存[PR #5](https://github.com/SMRI2170/autonomous-dev-orchestrator/pull/5)はCodeRabbitのCOMMENTEDと未解決スレッド1件によりREPAIR。CIの定義が全コミットでの実行を断定する点への指摘を取得でき、正式承認なしで合格させないことも実証。PR #6のPASSと混同しないこと。
 - 自動マージ・常駐サービスは無効のまま。以下の初期検証と区別すること。
 
@@ -237,3 +237,17 @@ CodeRabbit Appのこの新規repoへの接続もユーザーが完了し、PR #6
 追加レビューの指摘を反映し、トークン保存を固定repoからローカル設定の全対象へ一般化しました。readback失敗/タイムアウト時の新規Keychain項目のロールバックをテストしています。Issues/PR書込み権限は読み取りだけで確認済みと扱わず、UI確認とpilot実測が必要なことを明記しました。また、人間への引継ぎではbaseの更新だけで停止せず、base不変条件を自動マージ時に必須とする動作を2テストで確認しています。
 
 最終ローカル検証は61テスト成功。配布用examples/config.tomlが.gitignoreで除外される不具合も修正し、安全な初期値で読み込めるテストを追加しました。
+
+## 2026-10-24 LaunchAgent状態の訂正
+
+2026-10-18時点の記録は削除せず残します。2026-10-24時点の読み取り確認では、`local.ado.worker` はOSに登録済みで、稼働中でした。既存の登録の停止や再登録は行わず、状態の読み取りとこの記録の更新だけを行いました。
+
+2026-10-24 23時ごろ、同じ手順でライブ用の2本目 `local.ado.worker.live` を追加登録しました。既存の `local.ado.worker` は停止も再登録も行っていません。2本は別の `state_dir` を使い、同じ `state_dir` を共有する二重起動はしません。
+
+- plist: `~/Library/LaunchAgents/local.ado.worker.plist`（pilot）と `~/Library/LaunchAgents/local.ado.worker.live.plist`（live）
+- ラベル: `local.ado.worker`（pilot）と `local.ado.worker.live`（live）。どちらも `launchctl list` に表示され、実行中です
+- 起動コマンド: 各置き場の `.venv/bin/python` + `scripts/launch.py` + 同じ置き場の `config.toml`
+- 参照する設定:
+  - pilot: `dry_run = true`、`auto_merge = false`、対象は `SMRI2170/animal-shadow-match`、`allowed_paths = ["docs/ADO_PILOT_GLOSSARY_JA.md"]`
+  - live: `dry_run = false`、`auto_merge = false`、対象は `SMRI2170/autonomous-dev-orchestrator`
+- GitHubトークンは plist に保存せず、`scripts/launch.py` が macOS login Keychain（service `ado.github-token`、account `ado`）から読み出してプロセス環境変数として渡します。
