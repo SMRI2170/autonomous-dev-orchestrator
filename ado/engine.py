@@ -166,7 +166,30 @@ class Engine:
                 # Persist the in-flight review BEFORE using the subscription.
                 # Interrupted calls cannot be automatically replayed.
                 self.store.save(row, "REVIEWING", data)
-                result = self.reviewer.review(issue, originals, data["all_changes"], data["head"])
+                for review_attempt in range(2):
+                    try:
+                        result = self.reviewer.review(issue, originals, data["all_changes"], data["head"])
+                        break
+                    except UnusableOutput as exc:
+                        if review_attempt == 0:
+                            # The invocation completed but its answer was unusable. Retry
+                            # once in this same review stage without spending the Repair
+                            # budget. A plain Blocked is deliberately not caught here.
+                            self.activity(row, "review",
+                                          reason="MiniMax review output was unusable; retrying once")
+                            continue
+                        # A second unusable answer is terminal for this invocation.
+                        # Persist BLOCKED directly instead of saving REVIEW and relying
+                        # on tick()'s exception handler: a worker stop between those
+                        # writes could otherwise replay the review. resume=REVIEW keeps
+                        # an explicit human retry available.
+                        data.update(
+                            resume="REVIEW",
+                            reason="MiniMax review output was unusable after one retry "
+                                   "(レビュー出力が使用不能であった)",
+                        )
+                        self.store.save(row, "BLOCKED", data)
+                        return
                 # The remote head and diff must remain identical during review.
                 fresh_pr = self.gh.pr(repo, data["pr"])
                 self.verify_pr(row, data, fresh_pr)
@@ -307,10 +330,10 @@ class Engine:
     def settled_for(self, settled, findings, head):
         """Has this head already been found to have nothing outstanding for these findings?
 
-        A thread a human resolved disappears from the findings, so the set shrinks. That
-        is not a new finding: the ones that remain were already evaluated against this
-        head, so the answer would be the same. A finding that is new or different is not
-        among the settled ones, and it must go back to the model.
+        A thread a human resolved disappears from the findings, so the set shrinks. That is
+        not a new finding: the ones that remain were already evaluated against this head,
+        so the answer would be the same. A finding that is new or different is not among
+        the settled ones, and it must go back to the model.
         """
         if settled.get("head") != head:
             return False
