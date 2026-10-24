@@ -102,7 +102,7 @@ PR #20 を main に merge したあと（merge commit `82cb7c25`）、書き込�
 
 ### 実サービスで見つかった不具合（2件）
 
-1. **コンテキスト予算が、書き込み対象がコードのリポジトリを止めていた。** コンテキストは「モデルが編集できるすべてのファイル」です。書き込み対象をコードに広げると、このリポジトリの編集可能ファイルは 168,479 バイトで、150,000 バイトの既定予算を超えてしまいます。Issue #24 / #25 のジョブ（9 / 10）は、モデル呼出しを1度も行わないまま `Context budget exceeded` で止まりました。既定予算を 300,000 バイトに上げ、メッセージに数値と対処方法（`allowed_paths` / `context_paths` を狭めるか `max_context_bytes` を上げる）を含むようにしました（[PR #27](https://github.com/SMRI2170/autonomous-dev-orchestrator/pull/27)）。
+1. **コンテキスト予算が、書き込み対象がコードのリポジトリを止めていた。** コンテキストは、`allowed_paths` に一致する編集可能ファイルと、`context_paths` に一致する読み取り専用ファイルの合計です。書き込み対象をコードに広げると、このリポジトリの編集可能ファイルは 168,479 バイトで、150,000 バイトの既定予算を超えてしまいます。Issue #24 / #25 のジョブ（9 / 10）は、モデル呼出しを1度も行わないまま `Context budget exceeded` で止まりました。既定予算を 300,000 バイトに上げ、メッセージに数値と対処方法（`allowed_paths` / `context_paths` を狭めるか `max_context_bytes` を上げる）を含むようにしました（[PR #27](https://github.com/SMRI2170/autonomous-dev-orchestrator/pull/27)）。
 2. **main を動かすと、進行中のジョブのPRが「behind」で止まる。** ジョブのPRは生成時の main を起点に作られ、`mergeable_state` が `behind` になるとレビュー判定が `clean` にならずWAITのままです。自動の rebase は実装していません。PRのheadはSHAに束縛した証跡なので、PRのheadを変えるとジョブは `PR identity/head changed externally` で止まります。運用者は、ジョブが `AWAITING_HUMAN` で人手を待っている間に main を動かさない順序を守る必要があります。
 
 ### Issue #24 / PR #28（MiniMax M3 の実装）
