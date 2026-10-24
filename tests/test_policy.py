@@ -42,22 +42,48 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(check=check.__name__), self.assertRaises(Blocked):
                 check("github_pat_" + "x" * 50)
 
-    def test_a_committed_file_that_names_a_primitive_can_still_be_corrected(self):
+    def test_a_committed_document_that_names_a_primitive_can_still_be_corrected(self):
         # Regression: the output check refused the whole content of a changed file, so a
         # document that already named a dangerous primitive could never be edited -- and
         # this repository's own verification record names one, because it documents an
         # incident. The check must apply to what the change adds.
         committed = "The old reader thread called subprocess.run; the drain loop replaced it.\n"
-        inspect_text(committed, committed)                     # unchanged: nothing added
+        inspect_text(committed, committed, documentation=True)      # unchanged: nothing added
         corrected = committed.replace("the drain loop replaced it",
                                       "the drain loop replaced it in 2026-10-23")
-        inspect_text(corrected, committed)                    # a rewording adds no primitive
+        inspect_text(corrected, committed, documentation=True)     # a rewording adds none
         with self.assertRaises(Blocked):
-            inspect_text(committed + "\nNow it calls subprocess.run again.\n", committed)
+            inspect_text(committed + "\nNow it calls subprocess.run again.\n", committed,
+                         documentation=True)
         with self.assertRaises(Blocked):
-            inspect_text(committed + "\nAnd it runs os.system('x').\n", committed)
+            inspect_text(committed + "\nAnd it runs os.system('x').\n", committed,
+                         documentation=True)
         with self.assertRaises(Blocked):
-            inspect_text("subprocess.run(['ls'])\n", None)    # a new file is checked whole
+            inspect_text("subprocess.run(['ls'])\n", None)        # a new file is checked whole
+
+    def test_the_documentation_relaxation_is_wired_to_the_file_kind(self):
+        # The relaxation is only for documentation, and the kind of the file decides it.
+        cfg = {"allowed_paths": ["docs/**/*.md", "src/**/*.py"], "max_files": 5,
+               "max_change_bytes": 50000}
+        committed = "The old reader thread called subprocess.run; the drain loop replaced it.\n"
+        snapshot = {"docs/notes.md": committed}
+        validate_changes({"docs/notes.md": committed + "Reworded in 2026-10-23.\n"}, cfg, snapshot)
+        with self.assertRaises(Blocked):
+            validate_changes({"docs/notes.md": committed + "And subprocess.run again.\n"}, cfg, snapshot)
+        # A code file that contains a primitive is refused however small the edit is.
+        code = "subprocess.run(['ls'])\n"
+        with self.assertRaises(Blocked):
+            validate_changes({"src/run.py": code + "# a note\n"},
+                             {"allowed_paths": ["docs/**/*.md", "src/**/*.py"], "max_files": 5,
+                              "max_change_bytes": 50000}, {"src/run.py": code})
+
+    def test_code_keeps_the_stricter_check(self):
+        # Documentation may repeat what the repository already says. Code may not: a
+        # change must never trade one primitive for another, so a file that contains
+        # one at all is refused however small the edit is.
+        committed = "subprocess.run(['ls'])\n"
+        with self.assertRaises(Blocked):
+            inspect_text(committed + "# a note\n", committed)
 
     def test_redaction(self):
         token = "github_pat_" + "x" * 50
