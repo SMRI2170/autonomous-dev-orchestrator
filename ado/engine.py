@@ -18,8 +18,8 @@ def digest(value):
 
 
 def eligible(issue, cfg):
-    return issue.get("state") == "open" and "pull_request" not in issue and \
-        issue["user"]["login"] in cfg["trusted_authors"] and \
+    return issue.get("state") == "open" and "pull_request" not in issue and \u005c
+        issue["user"]["login"] in cfg["trusted_authors"] and \u005c
         cfg["issue_label"] in {x["name"] for x in issue["labels"]}
 
 
@@ -161,8 +161,8 @@ class Engine:
             # used to run only when the evidence was otherwise completely clean, which
             # stopped it from ever running once a finding from an earlier head was
             # outstanding. The findings it returns join the repair feedback on the next pass.
-            if cfg.get("review_provider", "coderabbit") == "minimax" and phase == "REVIEW" and \
-                    not self.reviewed(data, current_digest) and \
+            if cfg.get("review_provider", "coderabbit") == "minimax" and phase == "REVIEW" and \u005c
+                    not self.reviewed(data, current_digest) and \u005c
                     ci_green(pr, evidence, cfg) and reviewable(pr):
                 if self.reviewer is None:
                     raise Blocked("MiniMax reviewer unavailable; no fallback")
@@ -238,7 +238,7 @@ class Engine:
             fresh = self.gh.pr(repo, data["pr"])
             self.verify_pr(row, data, fresh)
             self.verify_diff(row, data)
-            auto = self.config["auto_merge"] and cfg.get("auto_merge", False) and \
+            auto = self.config["auto_merge"] and cfg.get("auto_merge", False) and \u005c
                 "ado:low-risk" in {x["name"] for x in issue["labels"]} and low_risk(data["all_changes"], cfg)
             if auto and cfg.get("review_provider") == "minimax":
                 raise Blocked("MiniMax self-review never authorizes auto-merge")
@@ -267,6 +267,8 @@ class Engine:
         must never be replayed, while a completed one is spent either way.
         """
         try:
+            if isinstance(changes, dict) and not changes:
+                raise Blocked("Model refused the work (no changes were proposed)")
             validate_changes(changes, cfg, files)
             for path in changes:
                 parts = path.split("/")
@@ -277,9 +279,10 @@ class Engine:
                     if i < len(parts) and mode == "100644":
                         raise Blocked("File used as parent directory")
             all_changes = {**data.get("all_changes", {}), **changes}
-            if len(all_changes) > cfg.get("max_files", 5) or \
-                    sum(len(v.encode()) for v in all_changes.values()) > cfg.get("max_change_bytes", 50000):
-                raise Blocked("Cumulative change budget exceeded")
+            if len(all_changes) > cfg.get("max_files", 5):
+                raise Blocked("Empty/oversized change set")
+            if sum(len(v.encode()) for v in all_changes.values()) > cfg.get("max_change_bytes", 50000):
+                raise Blocked("Change byte budget exceeded")
         except UnicodeEncodeError as exc:
             # A value that cannot be encoded as UTF-8 -- a lone surrogate in a JSON
             # string, say -- can never be committed. The call completed, so this is a
@@ -295,7 +298,7 @@ class Engine:
     def reviewed(self, data, digest):
         """Is there a MiniMax review bound to this head and this exact content?"""
         review = data.get("minimax_review")
-        return isinstance(review, dict) and review.get("sha") == data.get("head") and \
+        return isinstance(review, dict) and review.get("sha") == data.get("head") and \u005c
             review.get("changes_digest") == digest
 
     def unchanged(self, changes, cfg, files):
@@ -362,7 +365,7 @@ class Engine:
         # A settlement is checked before the budget, because it spends no call. A job
         # whose budget is spent but whose head has nothing outstanding must still be
         # able to wait for a human rather than block on a budget it cannot spend.
-        if repair and not self.outstanding(findings, parent) and \
+        if repair and not self.outstanding(findings, parent) and \u005c
                 self.settled_for(settled, findings, parent):
             # This head was already found to have nothing outstanding for these findings.
             # Do not spend another model call to learn the same thing -- and do not charge
@@ -382,7 +385,7 @@ class Engine:
         try:
             self.activity(row, "implement", repairing=bool(model_feedback), file_count=len(files))
             changes = self.agent.generate(issue, files, cfg, model_feedback)
-            if repair and data.get("pr") and not self.outstanding(findings, parent) and \
+            if repair and data.get("pr") and not self.outstanding(findings, parent) and \u005c
                     self.unchanged(changes, cfg, files):
                 # Every outstanding finding was raised against an earlier head and the
                 # current head already answers it, so the model had nothing to change.
@@ -440,9 +443,9 @@ class Engine:
         self.store.save(row, "REVIEW", data)
 
     def verify_pr(self, row, data, pr):
-        if pr["head"]["sha"] != data["head"] or pr["head"]["ref"] != data["branch"] or \
-           pr["base"]["ref"] != data["base_branch"] or \
-           (pr["head"].get("repo") or {}).get("full_name") != row["repo"] or \
+        if pr["head"]["sha"] != data["head"] or pr["head"]["ref"] != data["branch"] or \u005c
+           pr["base"]["ref"] != data["base_branch"] or \u005c
+           (pr["head"].get("repo") or {}).get("full_name") != row["repo"] or \u005c
            pr["base"]["repo"]["full_name"] != row["repo"]:
             raise Blocked("PR identity/head changed externally")
 
