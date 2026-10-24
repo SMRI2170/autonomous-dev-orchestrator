@@ -7,7 +7,7 @@
 `dry_run = false` で実サービスに接続し、Issue #18 から実PRの修正ループを最後まで一周させました。fixtureは使っていません。**Issue → 実MiniMax生成 → 実commit → 実branch → 実PR → CI → MiniMaxレビュー → 外部レビュー → PASS → AWAITING_HUMAN（人手マージ待ち）** まで到達し、修正は0回でした。自動マージは行っていません。
 
 - 実MiniMaxが 38,813 bytes のプロンプトで `docs/operator-runbook.md` を生成し、`validate_changes` を通って実commit `ea4b07cc`・実branch `ado/issue-12`・実PR #13 が作成されました。
-- CI成功後、`judge()` がSHAに紐づく証拠（check-run / review / GraphQL review thread）を評価しREPAIRを返しました。指摘はADO自身のGraphQLクエリで取得できていることを確認しています。
+- CI成功後、`judge()` がSHAに紐づく証拠（check-run / review / GraphQL review thread）を評価しREPAIRを返しました。指摘はADO自身のGraphQLクエリで取得できて確認しています。
 - REPAIRで再生成し、新head `86c30852f1ce` でCI成功まで到達しました。
 - `auto_merge` はグローバルとリポジトリの両方で `false` のままです。MiniMaxの自己reviewが自動マージを許可しないことはコードで保証されています。
 - heartbeatは実MiniMax呼出し中に `worker.json` が48.6秒進み、経過0.1秒でした。
@@ -24,7 +24,7 @@
 
 ### MiniMaxレビューの実サービス動作（Issue #16 / PR #17）
 
-- 実MiniMaxレビューが 처음으로実サービス上で走りました。`5d50e9429` に対する判定は `APPROVE`（指摘0件）で、head SHA と変更内容のdigestの両方に束縛された記録として保存されました。
+- 実MiniMaxレビューがはじめて実サービス上で走りました。`5d50e9429` に対する判定は `APPROVE`（指摘0件）で、head SHA と変更内容のdigestの両方に束縛された記録として保存されました。
 - Codexの指摘2件（check-runを検査実行の記録と定義する／dry-runでもローカル状態は記録する）を頭から直した `d3cd43b5a` に対し、同じMiniMaxレビューは `REQUEST_CHANGES` を返し、`dry-run` の説明が1文に収まっていないという受入条件違反を指摘しました。指摘は次の修復入力としてモデルに渡されます。
 - レビューは2回目で200秒近くかかりました。heartbeatは露出せず、呼び出しは正常に完了しました。応答時間の分布は未計測です。
 
@@ -118,7 +118,7 @@ PR #20 を main に merge したあと（merge commit `82cb7c25`）、書き込�
 
 ### 指摘と対処
 
-- `GitHub.api()`が`subprocess.run(..., timeout=45)`でブロックし、`pulse`を呼ばないため、`worker.json`の15秒ウィンドウを超えるリクエストでは稼働中のworkerが最大約45秒 offline と表示されていた。selectorのループを`ado/process.py`へ移し、`drain()`と`run()`に分離して両トランスポートで共有。GitHub側は独自の出力上限8,000,000バイト（ミニマixedの2,000,000ではない）を持つため、ページ分割された証拠を拒否しない。
+- `GitHub.api()`が`subprocess.run(..., timeout=45)`でブロックし、`pulse`を呼ばないため、`worker.json`の15秒ウィンドウを超えるリクエストでは稼働中のworkerが最大約45秒 offline と表示されていた。selectorのループを`ado/process.py`へ移し、`drain()`と`run()`に分離し、両トランスポートで共有。GitHub側は独自の出力上限8,000,000バイト（ミニマixedの2,000,000ではない）を持つため、ページ分割された証拠を拒否しない。
 - 呼び出し側が重複して持っていたPopen・期限待ち・プロセス群SIGKILL・回収・ストリームクローズを`run()`が一本化して持つようになった。例外時に呼び出し側が後始末を忘れる経路がなくなるため、MiniMax側の`finally`ブロックは削除できた。
 - `test_transport_does_not_leak_failure_body`が`subprocess.run`をpatchしていたが、トランスポートはその関数を使わなくなったため、実`gh`を起動して実ネットワーク応答に対して通過していた。テスト対象はトランスポート自身の接合点に差し替え、`tests/test_process.py`で「出力を伴って失敗するプロセスの出力がBlockedメッセージに入らないこと」を直接検証。
 
@@ -141,17 +141,17 @@ PR #20 を main に merge したあと（merge commit `82cb7c25`）、書き込�
 - キーボードフォーカスが再描画で失われる。工程ノードに`data-stage`、ジョブボタンに`dataset.job`を付け、再構築前にフォーカス要素を記録し一致する新要素へ戻す。
 - `/api/status`の取得失敗が無言で古い表示が残る。ライブ/demo両方で接続エラーを表示し、未取得時と取得済み時で文言を分ける。
 - 相対時刻（`0秒前`など）が変更なしポーリングで更新されない。`.job-age`を毎回の取得成功時に再計算する。
-- `ado doctor`のhelpプローブ出力が無制限だった。`generate`と同じ、stdoutとstderrの合計2,000,000バイトの上限とプロセスグループ停止を共有ヘルパー`drain()`に統一し、`while(true)`で書き続けるCLIでも停止することをNode fixtureで実証。
+- `ado doctor`のhelpプローブ出力が無制限だった。`generate`と同じ、stdoutとstderrの合計2,000,000バイトの上限とプロセスグループ停止を共有ヘルパー`drain()`に統一し、`while(true)`で書き続けるCLIも停止すること。Node fixtureで実証。
 - `docs/setup.md`と`examples/config.toml`で`entry`がソースビルドの`dist/cli.js`固定だった。npm版とソースビルド版の対応表を追加し、`runtime_root`とのずれがdoctorで失敗する旨を明記。
 - 履歴ベースの工程上書きに`REVIEWING`が含まれ、レビュアー呼び出し直前の`checks`イベントが勝って、レビューに時間がかかるあいだCIの工程と表示されていた。`REVIEWING`を上書き対象から外し、`Engine.step`は`REVIEWING`を保存する前にreview工程のイベントを記録。
-- heartbeatスレッドを残したままだと`Popen(preexec_fn=...)`のforkでCPythonが警告する危険があり、CPythonは`Popen`が返らない間に子プロセスの停止や期限も機能しない。スレッドを廃止し、長時間呼出しは自前のI/Oループの`pulse`から、`Store.touch()`と`Store.idle()`から生存通知を出す形に変更。
+- heartbeatスレッドを残したままだと`Popen(preexec_fn=...)`のforkでCPythonが警告する危険があり、子プロセスの停止や期限も機能しない。スレッドを廃止し、長時間呼出しは自前のI/Oループの`pulse`から、`Store.touch()`と`Store.idle()`から生存通知を出す形に変更。
 - スレッド廃止で次のポーリングまでの間に`worker.json`が更新されず、稼働中のworkerが15秒後にofflineと表示された。`ado/cli.py`の`time.sleep`を`Store.idle()`に置き換えた。
 - `Store.idle()`のテストが待ち終わった後に一度だけ読んでおり、待ちの最後だけheartbeatする退行でも通っていた。待ちの終わりから十分前の観測値に対して検証する形に修正し、終端時のみの`touch()`に戻すと失敗することを確認。
 
 ### 未検証
 
 - ブラウザによるキーボード操作とフォーカス復帰の実操作確認は未実施です。JSにはCIの自動テストがなく、PythonのテストはマーカーとHTTP応答だけを確認します。
-- 上記helper`drain()`は`selectors.DefaultSelector`でstdin/stdout/stderrを同一スレッドでまとめて読み書きし、期限/出力上限の超過を検出します。プロセス群へのSIGKILLと回収は`drain()`ではなく、それを呼び出す`doctor`と`generate`の各`finally`が行います。readerスレッドは存在しないため、旧形式처럼停止シグナルが届かない経路はありません。以前の実装（readerスレッドがSIGKILLを送り主スレッドの`finally`が回収を担保する形式）では15秒タイムアウトを1回だけ観測されましたが、現行形式では10回連続で再現せず、原因は特定できていません。旧形式での初回観測の記録であり、現行実装の不具合としては再現していません。
+- 上記helper`drain()`は`selectors.DefaultSelector`でstdin/stdout/stderrを同一スレッドでまとめて読み書きし、期限/出力上限の超過を検出します。プロセス群へのSIGKILLと回収は`drain()`ではなく、それを呼び出す`doctor`と`generate`の各`finally`が行います。readerスレッドは存在しないため、旧形式のように停止シグナルが届かない経路はありません。以前の実装（readerスレッドがSIGKILLを送り主スレッドの`finally`が回収を担保する形式）では15秒タイムアウトが1回だけ観測されましたが、現行形式では10回連続で再現せず、原因は特定できていません。旧形式での初回観測の記録であり、現行実装の不具合としては再現していません。
 - 上記のlivenessはMiniMaxの呼出しのみを対象としています。`GitHub.api()`は`subprocess.run(..., timeout=45)`で、待機中は`pulse`を呼ばないため、GitHubリクエストが15秒を超えると稼働中のworkerがofflineと表示されることがあります（最大で約45秒）。2026-10-22に修正（上記参照）。
 
 ## 2026-10-20 追加検証
