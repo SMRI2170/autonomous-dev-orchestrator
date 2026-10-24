@@ -98,8 +98,12 @@ class GitHubTests(unittest.TestCase):
         with patch.object(gh, "api", side_effect=[tree, blob(prose)]):
             with self.assertRaises(Blocked) as caught:
                 gh.snapshot("owner/project", "head", cfg)
-        self.assertIn("200", str(caught.exception))
-        self.assertIn("100", str(caught.exception))
+        message = str(caught.exception)
+        self.assertIn("200", message)
+        self.assertIn("100", message)
+        # The message has to say what the operator should do about it.
+        self.assertIn("max_context_bytes", message)
+        self.assertIn("allowed_paths", message)
         # The default budget has room for a repository whose write scope is the code:
         # four editable files of 40,000 bytes are 160,000 bytes, more than the old
         # 150,000 default and less than the current one.

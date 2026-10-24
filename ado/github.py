@@ -105,7 +105,8 @@ class GitHub:
                 # whose write scope includes the code needs a bigger budget than the
                 # documentation-only MVP did. The message names the numbers, because the
                 # remedy is the operator's: narrow the write scope, or raise the budget.
-                raise Blocked("Context budget exceeded: %d bytes of editable files, budget %d"
+                raise Blocked("Context budget exceeded: %d bytes of context, budget %d; "
+                              "narrow allowed_paths/context_paths or raise max_context_bytes"
                               % (total, budget))
             files[path] = content
         return files, modes
