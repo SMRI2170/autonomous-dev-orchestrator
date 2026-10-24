@@ -578,6 +578,25 @@ class EngineTests(unittest.TestCase):
         # The model was told why its answer was refused.
         self.assertTrue(any(item.get("kind") == "output" for item in calls[1]))
 
+    def test_a_value_that_is_not_text_is_rejected_as_unusable_output(self):
+        # Regression: a file value that is not text must be rejected as an unusable
+        # answer, not raise a type error out of the post-call window. A type error
+        # leaves the job in BUILDING, where a retry is refused as an interrupted call
+        # that never happened.
+        calls = []
+
+        def generate(issue, files, config, feedback):
+            calls.append(feedback)
+            if len(calls) == 1:
+                return {"docs/glossary.md": 42}
+            return {"docs/glossary.md": "# Glossary\nPR: pull request.\n"}
+
+        self.agent.generate = generate
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.store.get("owner/project", 1)["state"], "PUBLISHING")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(any(item.get("kind") == "output" for item in calls[1]))
+
     def test_unusable_output_is_repaired_instead_of_blocking_the_job(self):
         # Regression: real job 2 died "Agent must return a single strict JSON object with
         # files" after publishing PR #13, because every agent error was recorded as an
