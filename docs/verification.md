@@ -70,11 +70,11 @@ PR #20 には外部レビューが複数回血脂する。ここに書いたも�
 - Issue #12 のジョブは修復上限（3）に達し `resume="BUILDING"` でBLOCKEDになりました。PR #13 は head `86c30852f1ce` でopen のまま、Codex/CodeRabbit の未解決スレッドが残っています。自動マージは行いません。
 - Issue #14 のジョブ（PR #15）も修復上限に達し、head `3865ec369` でBLOCKEDです。3回目の修復で引用元の誤りはすべて直りましたが、Codex/CodeRabbitの指摘のうち「PRの略語を展開する」「人間確認が条件付きである」「項目間に空行入れる」は、5の不具合でモデルに届いていませんでした。
 - `judge()` の不具合を直した後も、ジョブ3は修復予算（3回）と呼出し予算（4回）を使い切っているため再実行できません。同じ内容を明示的に書いた新Issue #16を作り、予算のある新しいジョブで作り直します。
-- Issue #16 のジョブ（PR #17）は4回の修復で head `5d50e9429` → `d3cd43b5a` → `f8d3151bc` → `b6c238eed` と進み、MiniMaxレビューは `APPROVE` のあと2回目で `REQUEST_CHANGES`（dry-runの説明が1文に収まっていない）を返し、その指摘は次の修復入力に入りました。Codexの2件（dry-runでもローカルに書き込む／check-runは検査実行の記録）も直りましたが、Codexが次のheadに付けた2件（自動マージが有効でも低リスク条件を満たさない場合は人間確認が要る／review threadと未解決スレッドの区別）は残りました。修復上限（3）に達してBLOCKEDです。
+- Issue #16 のジョブ（PR #17）は3回の修復で head `5d50e9429` → `d3cd43b5a` → `f8d3151bc` → `b6c238eed` と進み、MiniMaxレビューは `APPROVE` のあと2回目で `REQUEST_CHANGES`（dry-runの説明が1文に収まっていない）を返し、その指摘は次の修復入力に入りました。Codexの2件（dry-runでもローカルに書き込む／check-runは検査実行の記録）も直りましたが、Codexが次のheadに付けた2件（自動マージが有効でも低リスク条件を満たさない場合は人間確認が要る／review threadと未解決スレッドの区別）は残りました。修復上限（3）に達してBLOCKEDです。
 - 残った2件は未修正なので、解決済と偽ってスレッドを閉じることはしません。製品が設計した復旧手順どおり、2件を反映した新Issue #18 を作り、予算のある新しいジョブで作り直します。
 - `Store.retry()` が修復予算をストア内で固定値3としか比較しておらず、設定値（`max_repairs`、上限0〜3）と食い違っていました。上限を3未満にした設定では、エンジンなら許す再試行をストアが拒否していました。予算の判断はエンジン側に一本化し、ストアは予算を持ちません。
 - CIのcheck-runが `in_progress` のまま完了せず `timeout-minutes` を超えることがありました（全11ステップがsuccessで `Complete job` まで到達）。`gh run rerun` で解消し、`judge()` の最新check-run優先の設計が実データで機能しました。原因はまだ特定できていません。
-- `docs/verification.md` の「LaunchAgentのOS登録・起動はしていません」という記述は、2026-10-24時点の `local.ado.worker`（OSに登録済みで稼働中、`dry_run = true`、`auto_merge = false`、対象は `SMRI2170/animal-shadow-match`）と一致しません。元のジョブ（8）は出力検査の緩和 전에予算を使い切って再開不能なので、[Issue #26](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/26) として作り直しました。実装待ちです。
+- `docs/verification.md` の2026-10-18時点の「LaunchAgentのOS登録・起動はしていません」という記述は、2026-10-24時点の `local.ado.worker`（OSに登録済みで稼働中、`dry_run = true`、`auto_merge = false`、対象は `SMRI2170/animal-shadow-match`）と一致しません。本文末尾の2026-10-24付の訂正で、実際の登録状態、起動コマンド、設定内容を追記済みです。元のジョブ（8）は出力検査の緩和 전에予算を使い切って再開不能なので、[Issue #26](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/26) として作り直しました。実装待ちです。
 
 ### 運用者が介入した操作（PR #15 / PR #17）
 
@@ -85,12 +85,12 @@ PR #20 には外部レビューが複数回血脂する。ここに書いたも�
 
 ### 未解決・既知の限界
 
-- `{"files":{}}` というモデルの明示的な拒否が、不正なJSONと同じ `Empty/oversized change set` として報告されます。2026-10-24 に [Issue #25](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/25) として起票しました。新しい予算つきのジョブでの実装待ちです。
-- `MiniMaxReviewer.review()` の出力不備も `REVIEWING` に残って再生不能です。2026-10-24 に [Issue #24](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/24) として起票しました（1回だけ再試行する方針）。無制限に再試行すると1ポーリングごとに新しいモデル呼出しが発生し、利用量に上限がないため、再試行は1回に 제한します。
-- 15秒を超えるGitHubリクエストでのダッシュボード表示は依然として未実施です（上記2026-10-22節を参照）。
+- `{"files":{}}` というモデルの明示的な拒否が、不正なJSONと同じ `Empty/oversized change set` として報告されます。2026-10-24 に [Issue #25](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/25) として起票し、[Issue #34](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/34) で修正して PR #35 としてマージ済みです。
+- `MiniMaxReviewer.review()` の出力不備が `REVIEWING` に残って再生不能だったのは、Issue #24 の修正前の状態でした。2026-10-24 に [Issue #24](https://github.com/SMRI2170/autonomous-dev-orchestrator/issues/24) として起票しました（1回だけ再試行する方針）。無制限に再試行すると1ポーリングごとに新しいモデル呼出しが発生し、利用量に上限がないため、再試行は1回に 제한します。
+- 15秒を超えるGitHubリクエストでのダッシュボード表示は、2026-10-25に実環境で確認しました（上記2026-10-22節の実装が効いていることを含む）。`gh` 呼出しを20秒遅延させる擬似スクリプトをPATHの先頭に置いて実際に15秒を超える要求を発生させ、45秒間の観測で `worker.json` の時刻が連続的に進み（経過0〜3秒）、ダッシュボードの表示は常に `worker応答あり` でした。
 - `snapshot()` は保護パス判定を CONTEXT にも適用するため、`docs/security.md` はモデルコンテキストから永久に除外されます。これは意図どおりです。
 - 未解決の指摘がすべて旧SHAのスレッドだけだと、修正すべきものが無いので実装は「変更なし」になります。実装には「変更なし」を示す手段がありませんので、1回だけ実装させて同内容を確認し、以降はそのheadでは実装し直させないようにしました。その間、人はスレッドを解決するまで待つことになります。
-- ブラウザによるキーボード操作とフォーカス復帰の実操作確認は引き続き未実施です。
+- ブラウザによるキーボード操作とフォーカス復帰の実操作確認は、2026-10-25に実ブラウザで実施しました。工程ノードとジョブボタンの双方で Tab と Enter による操作が有効で、3秒ごとの自動更新でDOMが作り直された後もフォーカスした要素が復元され、Enter が同じ対象を再び作動させることを確認しました。
 
 ### テスト
 
@@ -98,7 +98,7 @@ PR #20 には外部レビューが複数回血脂する。ここに書いたも�
 
 ## 2026-10-24 MiniMax M3 による実装ループ（Issue #24 / #25 / #26、PR #28）
 
-PR #20 を main に merge したあと（merge commit `82cb7c25`）、書き込み対象を実装ファイル（`ado/*.py` と `tests/test_issue*.py`）まで広げ、Issue #24 / #25 / #26 を起票して MiniMax M3 に実装させました。モデルが実装し、Codex / CodeRabbit と製品自身の MiniMax レビューがゲートし、人が merge する loop です。自動マージは使っていません。
+PR #20 を main に merge したあと（merge commit `82cb7c25`）、書き込み対象を実装ファイル（`ado/*.py` と `tests/test_issue*.py`）まで広げ、Issue #24 / #25 / #26 を起票しました。MiniMax M3 が実装したのは Issue #24 だけで、PR #28 としてマージ済みです。Issue #24 ではモデルが実装し、Codex / CodeRabbit と製品自身の MiniMax レビューがゲートし、人が merge する loop を通しました。自動マージは使っていません。Issue #25 のジョブ（10）は実モデルの呼出しを1回行い PR #29 を作りましたが、PR を merge しないまま閉じました。Issue #26 のジョブ（11）は PR #32 を作りましたが、修正のための再試行が MiniMax の実行期限に達して `BUILDING` に残って再開不能になり、PR #32 も閉じています。
 
 ### 実サービスで見つかった不具合（2件）
 
@@ -237,3 +237,48 @@ CodeRabbit Appのこの新規repoへの接続もユーザーが完了し、PR #6
 追加レビューの指摘を反映し、トークン保存を固定repoからローカル設定の全対象へ一般化しました。readback失敗/タイムアウト時の新規Keychain項目のロールバックをテストしています。Issues/PR書込み権限は読み取りだけで確認済みと扱わず、UI確認とpilot実測が必要なことを明記しました。また、人間への引継ぎではbaseの更新だけで停止せず、base不変条件を自動マージ時に必須とする動作を2テストで確認しています。
 
 最終ローカル検証は61テスト成功。配布用examples/config.tomlが.gitignoreで除外される不具合も修正し、安全な初期値で読み込めるテストを追加しました。
+## 2026-10-24 LaunchAgent状態の訂正
+
+2026-10-18時点の記録は削除せず残します。2026-10-24時点の読み取り確認では、`local.ado.worker` はOSに登録済みで、稼働中でした。既存の登録の停止や再登録は行わず、状態の読み取りとこの記録の更新だけを行いました。
+
+2026-10-24 23時ごろ、同じ手順でライブ用の2本目 `local.ado.worker.live` を追加登録しました。既存の `local.ado.worker` は停止も再登録も行っていません。2本は別の `state_dir` を使い、同じ `state_dir` を共有する二重起動はしません。
+
+- plist: `~/Library/LaunchAgents/local.ado.worker.plist`（pilot）と `~/Library/LaunchAgents/local.ado.worker.live.plist`（live）
+- ラベル: `local.ado.worker`（pilot）と `local.ado.worker.live`（live）。どちらも `launchctl list` に表示され、実行中です
+- 起動コマンド: 各置き場の `.venv/bin/python` + `scripts/launch.py` + 同じ置き場の `config.toml`
+- 参照する設定:
+  - pilot: `dry_run = true`、`auto_merge = false`、対象は `SMRI2170/animal-shadow-match`、`allowed_paths = ["docs/ADO_PILOT_GLOSSARY_JA.md"]`
+  - live: `dry_run = false`、`auto_merge = false`、対象は `SMRI2170/autonomous-dev-orchestrator`
+- GitHubトークンは plist に保存せず、`scripts/launch.py` が macOS login Keychain（service `ado.github-token`、account `ado`）から読み出してプロセス環境変数として渡します。
+- live 側は `KeepAlive` で、異常終了すると60秒の抑制時間を置いて再起動します。ミニMaxの呼出し中に落ちた場合、そのジョブは `BUILDING` のまま再開不能になり、人が新しいIssueで作り直す運用になります。
+
+## 2026-10-25 完了に向けた記録
+
+この節は、2026-10-25時点の常駐・実行環境、未検証だった項目の実施結果、バックログの整理、そして残った既知の限界を記録します。
+
+### 常駐と実行環境
+
+- ライブ用の LaunchAgent `local.ado.worker.live` を追加登録しました。pilot の `local.ado.worker`（`dry_run = true`、対象 `SMRI2170/animal-shadow-match`）は停止も再登録も行っていません。
+- ライブ側が使う MiniMax Code の runtime を 0.6.12 に整合しました（それまでは 0.6.9）。同じ runtime で `mcode exec --mode lightweight` の実呼び出しが6.4秒で成功し、認証済みプロファイルで応答が返ることを確認しました。認証は専用の `data_dir` にあり、plist にも環境変数にもトークンを保存しません。
+- `ado dashboard` の既定ポート 8765 は、このMacの他のローカルアプリが既に使っていました。ADO 側は別ポートで起動してください。ポートが埋まっている場合は `Address already in use` で起動に失敗します。
+
+### 未検証だった2項目（2026-10-25に実施）
+
+- **ブラウザによるキーボード操作とフォーカス復帰**: 実ブラウザで、工程ノードとジョブボタンの双方について Tab と Enter による操作が有効であることを確認しました。3秒ごとの自動更新でDOMが作り直された後も、フォーカスしていた要素が復元され、Enter が同じ対象を再び作動させます（工程は `validate` から `publish` へ、ジョブは Issue #37 から Issue #34 へ遷移して確認）。
+- **15秒を超えるGitHubリクエストでのダッシュボード表示**: `gh` を20秒遅延させる擬似スクリプトをPATHの先頭に置いて、実際に15秒を超えるGitHub要求を発生させました。45秒間の観測で `worker.json` の時刻は連続的に進み（経過0〜3秒）、ダッシュボードの表示は常に `worker応答あり` でした。2026-10-22節の修正が実環境で効いていることの確認になります。
+
+### バックログの整理
+
+- 重複していた Issue 11件（#12 / #14 / #16 / #21 / #22 / #23 / #25 / #26 / #31 / #33 / #37）を、置換先のIssueまたはPRを明記したうえでクローズしました。実装済みのものは既存の PR（#19 / #28 / #35）に対応します。
+- 放置されていた PR #13 / #15 / #17 も、代替のPRまたは作り直しのIssueを明記してクローズしました。
+
+### Issue #38（検証記録の LaunchAgent 記述の訂正）の経緯
+
+- Issue #37 のジョブ（15）は、MiniMax CLI の呼出し中にworkerが終了して `BUILDING` に残り、再開不能でした。`ado retry 15` は「中断したモデル呼出しの再生は禁止」で拒否されます。予算のある新しいジョブとして Issue #38 を作り直しました。
+- #38 のジョブ（16）は、モデル生成 → 検査 → 実commit → 実branch → 実PR #40 → CI成功 → MiniMaxレビュー `APPROVE` まで進み、CodeRabbitの3件の指摘を反映する3回目の修復で MiniMax CLI の呼出しが失敗して `BLOCKED` になりました（修復予算3・呼出し予算4を使い切り）。
+- PR #40 は閉じ、CodeRabbitの3件と LaunchAgent 記述の訂正は運用者が直接反映しました。
+
+### 既知の限界（2026-10-25に追記）
+
+- **既存の大きなファイルへの部分修正は、モデルに「置換後の全文」を返させる契約では安定しません。** #38 のジョブ（16）が返した `docs/verification.md`（約40KB）は、指定した1行の置換と末尾14行の追記に加えて、既存20行が書き換えられていました（合計41行の意図しない変更で、言い換え・誤字・句読点の混入を含みます）。新規ファイルの作成や小さな局所修正では同じ問題は起きていません。大きな既存ファイルを安全に直すには、差分だけを返す契約への変更が必要です。
+- `ado dashboard` の既定ポート 8765 は他アプリと衝突し得ます。
