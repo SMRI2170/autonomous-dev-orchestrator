@@ -1,6 +1,6 @@
 """Tool-less, fresh-session MiniMax review with strict fail-closed structured results."""
 import json
-from .policy import Blocked, redact
+from .policy import Blocked, UnusableOutput, redact
 
 REVIEW_INSTRUCTION = """You are the independent code reviewer, NOT the implementer.
 Review the proposed complete replacement files against the issue acceptance criteria and
@@ -15,6 +15,7 @@ or:
 Severities: critical, major, minor. Only report changed paths. At most 12 findings.
 Approve only when no actionable issues were found. No additional keys or Markdown.
 """
+
 
 def review_prompt(issue, originals, changes, sha):
     return REVIEW_INSTRUCTION + "\n" + json.dumps({
@@ -38,11 +39,17 @@ def _unique_keys(pairs):
 
 
 def parse_review(raw, sha, paths):
-    if not isinstance(raw, str) or len(raw.encode("utf-8")) > 50000:
+    if not isinstance(raw, str):
+        raise Blocked("MiniMax reviewer response invalid or too large")
+    try:
+        size = len(raw.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise Blocked("MiniMax reviewer response invalid or too large") from None
+    if size > 50000:
         raise Blocked("MiniMax reviewer response invalid or too large")
     try:
         value = json.loads(raw, object_pairs_hook=_unique_keys)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         raise Blocked("MiniMax reviewer did not return JSON") from None
     if not isinstance(value, dict) or set(value) != {"head_sha", "verdict", "findings"} or \
             value["head_sha"] != sha or not isinstance(sha, str) or len(sha) != 40 or \
@@ -74,4 +81,22 @@ class MiniMaxReviewer:
     def review(self, issue, originals, changes, sha):
         # Independent CLI invocation with fresh temporary HOME and no shared chat history.
         # Uses the SAME authenticated subscription profile, never a metered API key.
-        return parse_review(self.model.invoke(review_prompt(issue, originals, changes, sha)), sha, set(changes))
+        try:
+            raw = self.model.invoke(review_prompt(issue, originals, changes, sha))
+        except UnusableOutput as exc:
+            # The invocation itself failed. It is not a completed-but-unusable answer.
+            raise Blocked("MiniMax reviewer invocation failed") from exc
+        except Blocked:
+            # Preserve the ordinary interruption/failure classification.
+            raise
+        except Exception as exc:
+            # Fail closed if an adapter error escapes instead of a plain Blocked.
+            raise Blocked("MiniMax reviewer invocation failed") from exc
+        try:
+            return parse_review(raw, sha, set(changes))
+        except Blocked as exc:
+            # The CLI call completed, but its answer was rejected. This is recoverable
+            # and must not be confused with an interrupted invocation.
+            raise UnusableOutput(
+                "MiniMax reviewer returned unusable output: " + str(exc)
+            ) from exc
