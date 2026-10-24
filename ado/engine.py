@@ -166,7 +166,28 @@ class Engine:
                 # Persist the in-flight review BEFORE using the subscription.
                 # Interrupted calls cannot be automatically replayed.
                 self.store.save(row, "REVIEWING", data)
-                result = self.reviewer.review(issue, originals, data["all_changes"], data["head"])
+                for review_attempt in range(2):
+                    try:
+                        result = self.reviewer.review(issue, originals, data["all_changes"], data["head"])
+                        break
+                    except UnusableOutput as exc:
+                        if review_attempt == 0:
+                            # The invocation completed but its answer was unusable. Retry
+                            # once in this same review stage without spending the Repair
+                            # budget. A plain Blocked is deliberately not caught here.
+                            self.activity(row, "review",
+                                          reason="MiniMax review output was unusable; retrying once")
+                            continue
+                        # A second unusable answer is terminal for this stage. Restore a
+                        # retryable phase before the outer tick records the failure, so
+                        # the job is BLOCKED for human attention but Store.retry() can
+                        # resume it from REVIEW rather than treating it as an interrupted
+                        # REVIEWING call.
+                        self.store.save(row, "REVIEW", data)
+                        raise Blocked(
+                            "MiniMax review output was unusable after one retry "
+                            "(レビュー出力が使用不能であった)"
+                        ) from exc
                 # The remote head and diff must remain identical during review.
                 fresh_pr = self.gh.pr(repo, data["pr"])
                 self.verify_pr(row, data, fresh_pr)
