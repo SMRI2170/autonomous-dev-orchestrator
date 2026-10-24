@@ -101,15 +101,20 @@ def judge(pr, evidence, config, minimax_review=None, changes_digest=None):
         body = redact(comments[0]["body"])[:8000]
         # The commit can be null: a force push can drop the commit a thread refers to.
         thread_sha = (comments[0].get("commit") or {}).get("oid")
+        # The thread id keeps the identity of the thread. Two different threads can
+        # carry the same text against the same commit -- the same sentence about two
+        # different lines -- so the text alone cannot tell a new finding from one that
+        # has already been evaluated against this head.
+        identity = thread.get("id")
         if not thread["isOutdated"] and thread_sha == sha:
-            feedback.append({"kind": "thread", "body": body, "sha": sha})
+            feedback.append({"kind": "thread", "body": body, "sha": sha, "id": identity})
         else:
             # The finding was raised against an earlier head, but it is still unresolved
             # and the change it refers to may well survive in the current head. Leaving it
             # out of the feedback silently dropped the finding: the model was never told
             # about it, so the repair loop could not converge and the job stalled. Feed it
             # back, and keep blocking PASS until a human resolves the thread.
-            feedback.append({"kind": "thread", "body": body, "sha": thread_sha})
+            feedback.append({"kind": "thread", "body": body, "sha": thread_sha, "id": identity})
             waiting.append("unresolved old review thread")
     # Never repair while a required check is still running/missing: avoid burning retries.
     if any(x.startswith(("missing CI", "running CI")) for x in waiting):

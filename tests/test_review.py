@@ -70,11 +70,12 @@ class ReviewTests(unittest.TestCase):
         # Regression: real job 3 stalled because findings posted against the previous
         # head were recorded as "unresolved old review thread" and never appeared in the
         # repair feedback. The model was never told about them, so it could not fix them.
-        self.ev["threads"] = [{"isResolved": False, "isOutdated": True,
+        self.ev["threads"] = [{"id": "thread-1", "isResolved": False, "isOutdated": True,
                                 "comments": {"nodes": [{"body": "still broken", "commit": {"oid": "old"}}]}}]
         decision, feedback = judge(self.pr, self.ev, self.cfg)
         self.assertEqual(decision, "REPAIR")
-        self.assertEqual(feedback, [{"kind": "thread", "body": "still broken", "sha": "old"}])
+        self.assertEqual(feedback, [{"kind": "thread", "body": "still broken", "sha": "old",
+                                     "id": "thread-1"}])
 
     def test_a_stale_finding_still_blocks_a_pass(self):
         self.ev["threads"] = [{"isResolved": False, "isOutdated": True,
@@ -88,11 +89,12 @@ class ReviewTests(unittest.TestCase):
     def test_a_thread_whose_commit_is_gone_does_not_crash_the_judge(self):
         # A force push can drop the commit a thread refers to, and GitHub then returns
         # a null commit. The judge must treat that as an old thread, not raise.
-        self.ev["threads"] = [{"isResolved": False, "isOutdated": True,
+        self.ev["threads"] = [{"id": "thread-1", "isResolved": False, "isOutdated": True,
                                 "comments": {"nodes": [{"body": "fix this", "commit": None}]}}]
         decision, feedback = judge(self.pr, self.ev, self.cfg)
         self.assertEqual(decision, "REPAIR")
-        self.assertEqual(feedback, [{"kind": "thread", "body": "fix this", "sha": None}])
+        self.assertEqual(feedback, [{"kind": "thread", "body": "fix this", "sha": None,
+                                     "id": "thread-1"}])
 
     def test_human_changes_requested_remains_veto(self):
         self.ev["reviews"].append({"id": 2, "user": {"login": "human", "type": "User"},

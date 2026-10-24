@@ -160,7 +160,7 @@ class GitHub:
         query = """query($owner:String!,$name:String!,$number:Int!,$cursor:String){
           repository(owner:$owner,name:$name){pullRequest(number:$number){
             reviewThreads(first:100,after:$cursor){pageInfo{hasNextPage endCursor}
-              nodes{isResolved isOutdated comments(first:1){nodes{body commit{oid}}}}}
+              nodes{id isResolved isOutdated comments(first:1){nodes{body commit{oid}}}}}
           }}}"""
         threads, cursor = [], None
         for _ in range(20):

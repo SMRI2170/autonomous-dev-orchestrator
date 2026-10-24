@@ -463,7 +463,7 @@ class EngineTests(unittest.TestCase):
             return {"docs/glossary.md": content}          # the same as the snapshot
 
         self.agent.generate = generate
-        self.gh.threads = [{"isResolved": False, "isOutdated": True,
+        self.gh.threads = [{"id": "thread-1", "isResolved": False, "isOutdated": True,
                             "comments": {"nodes": [{"body": "old finding", "commit": {"oid": "old"}}]}}]
         self.assertEqual(self.tick(), "PUBLISHING")
         self.assertEqual(self.tick(), "REVIEW")
@@ -474,7 +474,7 @@ class EngineTests(unittest.TestCase):
         # The head was settled against the findings alone: the reason is not in it.
         settled = data.get("settled") or {}
         self.assertTrue(settled)
-        findings = [{"kind": "thread", "body": "old finding", "sha": "old"}]
+        findings = [{"kind": "thread", "body": "old finding", "sha": "old", "id": "thread-1"}]
         self.assertEqual(settled["feedback"], digest(findings))
         self.assertNotEqual(settled["feedback"], digest(findings + [{"kind": "output",
                                                                       "body": "rejected output"}]))
@@ -596,6 +596,33 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.store.get("owner/project", 1)["state"], "PUBLISHING")
         self.assertEqual(len(calls), 2)
         self.assertTrue(any(item.get("kind") == "output" for item in calls[1]))
+
+    def test_a_new_thread_with_the_same_text_is_not_taken_for_a_settled_one(self):
+        # Regression: the settlement compared findings by their text and commit, so a
+        # second thread saying the same thing about a different line looked like the
+        # finding that had already been evaluated against this head. The new finding
+        # was swallowed and never reached the model.
+        content = "# Glossary\nPR: pull request. Revision 1.\n"
+        calls = []
+
+        def generate(issue, files, config, feedback):
+            calls.append(feedback)
+            return {"docs/glossary.md": content} if len(calls) == 1 else dict(files)
+
+        def thread(identity):
+            return {"id": identity, "isResolved": False, "isOutdated": True,
+                    "comments": {"nodes": [{"body": "same finding", "commit": {"oid": "old"}}]}}
+
+        self.agent.generate = generate
+        self.gh.threads = [thread("first"), thread("second")]
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(len(calls), 2)
+        # A third thread with the same text against the same commit is a new finding.
+        self.gh.threads = [thread("first"), thread("second"), thread("third")]
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(len(calls), 3)
 
     def test_unusable_output_is_repaired_instead_of_blocking_the_job(self):
         # Regression: real job 2 died "Agent must return a single strict JSON object with
