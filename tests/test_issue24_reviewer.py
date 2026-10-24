@@ -43,6 +43,9 @@ class FakeGitHub:
     def metadata(self, _repo):
         return {"default_branch": "main"}
 
+    def issues(self, _repo):
+        return []
+
     def issue(self, _repo, _number):
         return {
             "number": 24,
@@ -174,8 +177,16 @@ class Issue24ReviewerTests(unittest.TestCase):
             self.assertNotEqual("REVIEWING", current["state"])
             self.assertEqual("REVIEW", data["resume"])
             self.assertIn("review output was unusable", data["reason"].lower())
+            self.assertIn("レビュー出力が使用不能であった", data["reason"])
             self.assertEqual(0, data["repairs"])
+            self.assertEqual(1, data["calls"])
             self.assertEqual(2, reviewer.calls)
+
+            # A blocked job must not start another review automatically.
+            idle = engine.tick()
+            self.assertEqual("IDLE", idle["state"])
+            self.assertEqual(2, reviewer.calls)
+
             store.retry(current["id"])
             self.assertEqual("REVIEW", store.get("owner/repo", 24)["state"])
 
@@ -195,6 +206,17 @@ class Issue24ReviewerTests(unittest.TestCase):
 
     def test_reviewer_marks_rejected_completed_output_as_unusable(self):
         reviewer = MiniMaxReviewer(StubModel("not JSON"))
+        with self.assertRaises(UnusableOutput):
+            reviewer.review(
+                {"title": "Review", "body": "## Acceptance criteria\nReview."},
+                {},
+                {},
+                "a" * 40,
+            )
+
+    def test_reviewer_marks_deeply_nested_completed_output_as_unusable(self):
+        raw = "[" * 2000 + "0" + "]" * 2000
+        reviewer = MiniMaxReviewer(StubModel(raw))
         with self.assertRaises(UnusableOutput):
             reviewer.review(
                 {"title": "Review", "body": "## Acceptance criteria\nReview."},

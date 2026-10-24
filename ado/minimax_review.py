@@ -49,7 +49,7 @@ def parse_review(raw, sha, paths):
         raise Blocked("MiniMax reviewer response invalid or too large")
     try:
         value = json.loads(raw, object_pairs_hook=_unique_keys)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         raise Blocked("MiniMax reviewer did not return JSON") from None
     if not isinstance(value, dict) or set(value) != {"head_sha", "verdict", "findings"} or \
             value["head_sha"] != sha or not isinstance(sha, str) or len(sha) != 40 or \
