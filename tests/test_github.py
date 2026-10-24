@@ -84,6 +84,36 @@ class GitHubTests(unittest.TestCase):
             with self.assertRaises(Blocked):
                 gh.snapshot("owner/project", "head", repo_config())
 
+    def test_the_context_budget_names_the_numbers_and_the_remedy(self):
+        # Regression: the budget was 150,000 bytes, which was sized for the
+        # documentation-only MVP where the editable set was a handful of markdown
+        # files. A repository whose write scope includes the code could not start a
+        # job at all, and the message did not say which numbers were at fault.
+        prose = "x" * 200
+        tree = {"tree": [{"path": "docs/notes.md", "type": "blob", "mode": "100644",
+                          "size": len(prose), "sha": "b1"}]}
+        blob = lambda text: {"content": base64.b64encode(text.encode()).decode()}
+        gh = GitHub()
+        cfg = dict(repo_config(), max_context_bytes=100)
+        with patch.object(gh, "api", side_effect=[tree, blob(prose)]):
+            with self.assertRaises(Blocked) as caught:
+                gh.snapshot("owner/project", "head", cfg)
+        message = str(caught.exception)
+        self.assertIn("200", message)
+        self.assertIn("100", message)
+        # The message has to say what the operator should do about it.
+        self.assertIn("max_context_bytes", message)
+        self.assertIn("allowed_paths", message)
+        # The default budget has room for a repository whose write scope is the code:
+        # four editable files of 40,000 bytes are 160,000 bytes, more than the old
+        # 150,000 default and less than the current one.
+        big = "x" * 40000
+        big_tree = {"tree": [{"path": "src/file%d.py" % i, "type": "blob", "mode": "100644",
+                               "size": len(big), "sha": "b%d" % i} for i in range(4)]}
+        with patch.object(gh, "api", side_effect=[big_tree] + [blob(big)] * 4):
+            files, _ = gh.snapshot("owner/project", "head", repo_config())
+        self.assertEqual(len(files), 4)
+
     def test_private_repositories_rejected(self):
         gh = GitHub()
         with patch.object(gh, "api", return_value={"private": True}), self.assertRaises(Blocked):
