@@ -8,7 +8,7 @@ class Issue25RefusalTests(unittest.TestCase):
     REFUSAL_REASON = "Model refused the work (no changes were proposed)"
 
     def make_engine(self):
-        return Engine({}, None, None, None)
+        return Engine({"repositories": []}, None, None, None)
 
     def config(self):
         return {
@@ -45,9 +45,11 @@ class Issue25RefusalTests(unittest.TestCase):
         engine = self.make_engine()
         changes = {"docs/new.md": "b" * 60}
         data = {"all_changes": {"docs/old.md": "a" * 60}}
+        cfg = self.config()
+        cfg["max_files"] = 2
 
         with self.assertRaises(UnusableOutput) as raised:
-            engine.usable(changes, self.config(), {}, {}, data)
+            engine.usable(changes, cfg, {}, {}, data)
 
         reason = str(raised.exception)
         self.assertEqual("Change byte budget exceeded", reason)
