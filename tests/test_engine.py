@@ -380,6 +380,32 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertIn("newer finding", calls[2][0]["body"])
 
+    def test_a_retried_job_starts_from_the_current_main(self):
+        # Regression: a job that failed before publishing anything kept the base it
+        # had captured when it first started. If main moved on in the meantime, the
+        # job implemented against a stale tree and its pull request conflicted with
+        # the branch it targets -- a conflict that no repair can undo, because the
+        # change is bound to the head the job created.
+        original = self.gh.snapshot
+
+        def failing_snapshot(*args):
+            raise Blocked("temporary GitHub snapshot failure")
+
+        self.gh.snapshot = failing_snapshot
+        self.assertEqual(self.tick(), "BLOCKED")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(data["resume"], "QUEUED")
+        self.assertEqual(data["base"], "b" * 40)
+        # Main moves on while the job waits for a human.
+        self.gh.base = "c" * 40
+        self.gh.snapshot = original
+        self.store.retry(1)
+        self.assertEqual(self.tick(), "PUBLISHING")
+        data = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(data["base"], "c" * 40)
+        # The work that was already billed is still counted.
+        self.assertEqual(data["calls"], 1)
+
     def test_a_resumed_job_keeps_the_calls_it_has_already_spent(self):
         # Regression: a job that came back to QUEUED after a rejected output had its
         # counters reset, so the billed call was forgotten and the budget could be
