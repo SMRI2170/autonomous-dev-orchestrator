@@ -30,6 +30,10 @@ class Agent:
     def generate(self, issue, files, config, feedback):
         self.calls += 1
         self.inputs.append(copy.deepcopy(feedback))
+        # A changed Python file has to parse: the engine refuses an answer that would
+        # publish a file the interpreter cannot read.
+        if self.path.endswith(".py"):
+            return {self.path: f"# Revision {self.calls}\ndef feature():\n    return {self.calls}\n"}
         return {self.path: f"# Glossary\nPR: pull request. Revision {self.calls}.\n"}
 
 

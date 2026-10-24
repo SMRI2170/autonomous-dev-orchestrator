@@ -104,6 +104,26 @@ def inspect_text(text, previous=None, documentation=False):
         raise Blocked("Dangerous command or execution primitive detected")
 
 
+def parses(path, content):
+    """A changed Python file must at least parse.
+
+    The model returns the complete file as a JSON string, and one stray escape turns
+    every line continuation into the six characters of an escape sequence: the file
+    that reaches the pull request does not parse, and the only signal is a red build.
+    The check belongs here, where the model cannot remove it, and it gives the model
+    a precise reason to correct itself.
+    """
+    if not path.endswith(".py"):
+        return
+    try:
+        compile(content, path, "exec")
+    except SyntaxError as exc:
+        raise Blocked("Changed file does not compile: %s line %s: %s"
+                      % (path, exc.lineno, exc.msg)) from exc
+    except ValueError as exc:
+        raise Blocked("Changed file cannot be compiled: " + path) from exc
+
+
 def validate_changes(changes, config, snapshot):
     if not isinstance(changes, dict) or not changes or len(changes) > config.get("max_files", 5):
         raise Blocked("Empty/oversized change set")
@@ -113,6 +133,7 @@ def validate_changes(changes, config, snapshot):
         if not matches(path, config["allowed_paths"]):
             raise Blocked("File outside configured allowlist: " + path)
         inspect_text(content, snapshot.get(path), documentation=path.endswith('.md'))
+        parses(path, content)
         size += len(content.encode())
         if snapshot.get(path) == content:
             raise Blocked("Unchanged file returned: " + path)

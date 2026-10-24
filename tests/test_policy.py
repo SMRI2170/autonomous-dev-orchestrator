@@ -85,6 +85,22 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(Blocked):
             inspect_text(committed + "# a note\n", committed)
 
+    def test_a_changed_python_file_must_parse(self):
+        # Regression: the model returns the complete file as a JSON string, and one
+        # stray escape turns every line continuation into the six characters of an
+        # escape sequence. The file that reached the pull request did not parse, and
+        # the only signal was a red build -- the model was never told.
+        cfg = {"allowed_paths": ["src/**/*.py", "docs/**/*.md"], "max_files": 5,
+               "max_change_bytes": 50000}
+        broken = "def f():\n    return 1 and \\u005c\n"
+        with self.assertRaises(Blocked) as caught:
+            validate_changes({"src/a.py": broken}, cfg, {})
+        self.assertIn("does not compile", str(caught.exception))
+        self.assertIn("src/a.py", str(caught.exception))
+        # A file that parses is accepted, and a document is not parsed at all.
+        validate_changes({"src/a.py": "def f():\n    return 1\n"}, cfg, {})
+        validate_changes({"docs/a.md": "not python at all: \\u005c\n"}, cfg, {})
+
     def test_redaction(self):
         token = "github_pat_" + "x" * 50
         self.assertNotIn(token, redact("bearer " + token))
