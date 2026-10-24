@@ -94,7 +94,23 @@ PR #20 には外部レビューが複数回血脂する。ここに書いたも�
 
 ### テスト
 
-- `python -m unittest discover` は159件成功。新規の回帰テスト（入力/出力の検査分離、完了出力の再試行、中断の再生禁止、出力再試行での指摘保持、旧headの指摘の受け渡し、変更なし時の待機）はそれぞれ変異で検査が機能することを確認済みです。
+- `python -m unittest discover` は159件成功（PR #20 merge時点）。新規の回帰テスト（入力/出力の検査分離、完了出力の再試行、中断の再生禁止、出力再試行での指摘保持、旧headの指摘の受け渡し、変更なし時の待機）はそれぞれ変異で検査が機能することを確認済みです。
+
+## 2026-10-24 MiniMax M3 による実装ループ（Issue #24 / #25 / #26、PR #28）
+
+PR #20 を main に merge したあと（merge commit `82cb7c25`）、書き込み対象を実装ファイル（`ado/*.py` と `tests/test_issue*.py`）まで広げ、Issue #24 / #25 / #26 を起票して MiniMax M3 に実装させました。モデルが実装し、Codex / CodeRabbit と製品自身の MiniMax レビューがゲートし、人が merge する loop です。自動マージは使っていません。
+
+### 実サービスで見つかった不具合（2件）
+
+1. **コンテキスト予算が、書き込み対象がコードのリポジトリを止めていた。** コンテキストは「モデルが編集できるすべてのファイル」です。書き込み対象をコードに広げると、このリポジトリの編集可能ファイルは 168,479 バイトで、150,000 バイトの既定予算を超えてしまいます。Issue #24 / #25 のジョブ（9 / 10）は、モデル呼出しを1度も行わないまま `Context budget exceeded` で止まりました。既定予算を 300,000 バイトに上げ、メッセージに数値と対処方法（`allowed_paths` / `context_paths` を狭めるか `max_context_bytes` を上げる）を含むようにしました（[PR #27](https://github.com/SMRI2170/autonomous-dev-orchestrator/pull/27)）。
+2. **main を動かすと、進行中のジョブのPRが「behind」で止まる。** ジョブのPRは生成時の main を起点に作られ、`mergeable_state` が `behind` になるとレビュー判定が `clean` にならずWAITのままです。自動の rebase は実装していません。PRのheadはSHAに束縛した証跡なので、PRのheadを変えるとジョブは `PR identity/head changed externally` で止まります。運用者は、ジョブが `AWAITING_HUMAN` で人手を待っている間に main を動かさない順序を守る必要があります。
+
+### Issue #24 / PR #28（MiniMax M3 の実装）
+
+- MiniMax M3 が `ado/minimax_review.py`、`ado/engine.py`、`tests/test_issue24_reviewer.py` の3ファイルを生成しました（Issue の指定どおり、他のファイルには触れていません）。実プロンプトは 179,373 バイト、モデル呼出しは約5分でした。
+- 製品自身の MiniMax レビューが `APPROVE`（指摘0件、head SHA と変更digestに束縛）。
+- 新規テスト5件を含む 165 テストが成功。再試行しない・2回目は人が扱える状態Interrupted は再試行しない・拒否した出力は UnusableOutput になる・CLI失敗は素のBlocked の4点を変異で検査し、すべて殺せました。
+- [PR #28](https://github.com/SMRI2170/autonomous-dev-orchestrator/pull/28) は CI 成功・未解決スレッド0・レビュー通過のうえで merge 済み（merge commit `d971ad44`）。Issue #24 は `COMPLETED` で閉じ、ジョブ9は `DONE` です。
 
 ## 2026-10-22 追加検証
 
