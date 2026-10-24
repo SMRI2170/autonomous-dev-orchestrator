@@ -42,6 +42,23 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(check=check.__name__), self.assertRaises(Blocked):
                 check("github_pat_" + "x" * 50)
 
+    def test_a_committed_file_that_names_a_primitive_can_still_be_corrected(self):
+        # Regression: the output check refused the whole content of a changed file, so a
+        # document that already named a dangerous primitive could never be edited -- and
+        # this repository's own verification record names one, because it documents an
+        # incident. The check must apply to what the change adds.
+        committed = "The old reader thread called subprocess.run; the drain loop replaced it.\n"
+        inspect_text(committed, committed)                     # unchanged: nothing added
+        corrected = committed.replace("the drain loop replaced it",
+                                      "the drain loop replaced it in 2026-10-23")
+        inspect_text(corrected, committed)                    # a rewording adds no primitive
+        with self.assertRaises(Blocked):
+            inspect_text(committed + "\nNow it calls subprocess.run again.\n", committed)
+        with self.assertRaises(Blocked):
+            inspect_text(committed + "\nAnd it runs os.system('x').\n", committed)
+        with self.assertRaises(Blocked):
+            inspect_text("subprocess.run(['ls'])\n", None)    # a new file is checked whole
+
     def test_redaction(self):
         token = "github_pat_" + "x" * 50
         self.assertNotIn(token, redact("bearer " + token))

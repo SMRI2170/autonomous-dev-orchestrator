@@ -2,6 +2,7 @@
 import fnmatch
 import json
 import re
+from collections import Counter
 from pathlib import PurePosixPath
 
 
@@ -74,10 +75,27 @@ def inspect_source(text):
         raise Blocked("Potential secret detected")
 
 
-def inspect_text(text):
-    """Check text the model proposed, which may become executable project content."""
+def dangerous_counts(text):
+    """How often each dangerous primitive appears in the text."""
+    return Counter(DANGEROUS.findall(text))
+
+
+def inspect_text(text, previous=None):
+    """Check text the model proposed, which may become executable project content.
+
+    A committed file may already name a dangerous primitive -- this repository's own
+    verification record does, because it documents an incident -- and the model must
+    still be able to correct that file. So the check asks what the change *adds*: every
+    primitive the new content has must already be in the old content, as often. A new
+    file is checked whole, because everything in it is new. A credential is refused
+    outright, whatever the file already contained.
+    """
     inspect_source(text)
-    if DANGEROUS.search(text):
+    if previous is None:
+        if DANGEROUS.search(text):
+            raise Blocked("Dangerous command or execution primitive detected")
+        return
+    if dangerous_counts(text) - dangerous_counts(previous):
         raise Blocked("Dangerous command or execution primitive detected")
 
 
@@ -89,7 +107,7 @@ def validate_changes(changes, config, snapshot):
         safe_path(path)
         if not matches(path, config["allowed_paths"]):
             raise Blocked("File outside configured allowlist: " + path)
-        inspect_text(content)
+        inspect_text(content, snapshot.get(path))
         size += len(content.encode())
         if snapshot.get(path) == content:
             raise Blocked("Unchanged file returned: " + path)
