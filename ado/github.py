@@ -99,8 +99,14 @@ class GitHub:
                 raise Blocked("Non-UTF8 context") from exc
             inspect_source(content)
             total += len(content.encode())
-            if total > config.get("max_context_bytes", 150000):
-                raise Blocked("Context budget exceeded")
+            budget = config.get("max_context_bytes", 300000)
+            if total > budget:
+                # The context is every file this repository may edit, so a repository
+                # whose write scope includes the code needs a bigger budget than the
+                # documentation-only MVP did. The message names the numbers, because the
+                # remedy is the operator's: narrow the write scope, or raise the budget.
+                raise Blocked("Context budget exceeded: %d bytes of editable files, budget %d"
+                              % (total, budget))
             files[path] = content
         return files, modes
 
