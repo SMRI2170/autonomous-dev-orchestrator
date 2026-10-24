@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from .policy import Blocked, parse_changes
+from .policy import Blocked, UnusableOutput, parse_changes
 from .process import run
 
 INSTRUCTION = """You implement a small issue by proposing replacement UTF-8 file contents.
@@ -62,7 +62,13 @@ class MiniMax:
         self.pulse = pulse
 
     def generate(self, issue, files, repo_config, feedback):
-        return parse_changes(self.invoke(prompt(issue, files, repo_config, feedback)))
+        raw = self.invoke(prompt(issue, files, repo_config, feedback))
+        # Split so an in-flight failure keeps Blocked (never replay) while a completed
+        # call with unusable output becomes recoverable UnusableOutput.
+        try:
+            return parse_changes(raw)
+        except Blocked as exc:
+            raise UnusableOutput("Model returned output that is not a strict changes object") from exc
 
     def runtime_paths(self):
         """Validate the reviewed local installation. Never reads a credential itself."""

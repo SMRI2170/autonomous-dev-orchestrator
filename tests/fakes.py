@@ -56,6 +56,7 @@ class GitHub:
         self.mergeable_state = "clean"
         self.mergeable = True
         self.extra_files = []
+        self.threads = []
 
     def metadata(self, repo):
         return {"default_branch": "main", "private": False}
@@ -104,7 +105,7 @@ class GitHub:
                "state": "APPROVED" if self.review == "PASS" else "CHANGES_REQUESTED"}
         return {"checks": [{"id": 1, "name": "unit", "head_sha": self.head, "app": {"slug": "github-actions", "id": 15368},
                             "status": "completed", "conclusion": self.ci}],
-                "reviews": [] if self.review == "MISSING" else [bot], "threads": []}
+                "reviews": [] if self.review == "MISSING" else [bot], "threads": self.threads}
 
     def changed_files(self, repo, number):
         result = []

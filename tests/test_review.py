@@ -62,9 +62,56 @@ class ReviewTests(unittest.TestCase):
                                 "comments": {"nodes": [{"body": "fix this", "commit": {"oid": "head"}}]}}]
         self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "REPAIR")
         self.ev["threads"][0]["isOutdated"] = True
-        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "WAIT")
+        self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "REPAIR")
         self.ev["threads"][0]["isResolved"] = True
         self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "PASS")
+
+    def test_finding_raised_against_an_earlier_head_still_reaches_the_model(self):
+        # Regression: real job 3 stalled because findings posted against the previous
+        # head were recorded as "unresolved old review thread" and never appeared in the
+        # repair feedback. The model was never told about them, so it could not fix them.
+        self.ev["threads"] = [{"id": "thread-1", "isResolved": False, "isOutdated": True,
+                                "comments": {"nodes": [{"body": "still broken", "commit": {"oid": "old"}}]}}]
+        decision, feedback = judge(self.pr, self.ev, self.cfg)
+        self.assertEqual(decision, "REPAIR")
+        self.assertEqual(feedback, [{"kind": "thread", "body": "still broken", "sha": "old",
+                                     "id": "thread-1", "path": None, "line": None}])
+
+    def test_a_finding_carries_the_place_it_refers_to(self):
+        # A thread that says "this is wrong" is of little use to the model without the
+        # file and the line it is about. For a thread raised against an earlier head the
+        # current line is null, so the original line is what it referred to.
+        self.ev["threads"] = [{"id": "thread-1", "isResolved": False, "isOutdated": False,
+                                "path": "ado/engine.py", "line": 42, "originalLine": 7,
+                                "comments": {"nodes": [{"body": "fix this", "commit": {"oid": "head"}}]}}]
+        decision, feedback = judge(self.pr, self.ev, self.cfg)
+        self.assertEqual(decision, "REPAIR")
+        self.assertEqual(feedback[0]["path"], "ado/engine.py")
+        self.assertEqual(feedback[0]["line"], 42)
+        # An outdated thread keeps the line it was raised against.
+        self.ev["threads"][0].update(isOutdated=True, line=None)
+        decision, feedback = judge(self.pr, self.ev, self.cfg)
+        self.assertEqual(decision, "REPAIR")
+        self.assertEqual(feedback[0]["line"], 7)
+
+    def test_a_stale_finding_still_blocks_a_pass(self):
+        self.ev["threads"] = [{"isResolved": False, "isOutdated": True,
+                                "comments": {"nodes": [{"body": "still broken", "commit": {"oid": "old"}}]}}]
+        decision, feedback = judge(self.pr, self.ev, self.cfg)
+        self.assertEqual(decision, "REPAIR")
+        # Nothing about a stale thread may let a job through on its own.
+        self.ev["threads"][0]["comments"]["nodes"][0]["body"] = "still broken"
+        self.assertNotEqual(judge(self.pr, self.ev, self.cfg)[0], "PASS")
+
+    def test_a_thread_whose_commit_is_gone_does_not_crash_the_judge(self):
+        # A force push can drop the commit a thread refers to, and GitHub then returns
+        # a null commit. The judge must treat that as an old thread, not raise.
+        self.ev["threads"] = [{"id": "thread-1", "isResolved": False, "isOutdated": True,
+                                "comments": {"nodes": [{"body": "fix this", "commit": None}]}}]
+        decision, feedback = judge(self.pr, self.ev, self.cfg)
+        self.assertEqual(decision, "REPAIR")
+        self.assertEqual(feedback, [{"kind": "thread", "body": "fix this", "sha": None,
+                                     "id": "thread-1", "path": None, "line": None}])
 
     def test_human_changes_requested_remains_veto(self):
         self.ev["reviews"].append({"id": 2, "user": {"login": "human", "type": "User"},

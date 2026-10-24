@@ -2,8 +2,9 @@ import hashlib
 import json
 import time
 from datetime import datetime, timezone
-from .policy import (Blocked, dependencies, inspect_text, low_risk, redact, validate_changes)
-from .review import judge
+from .policy import (Blocked, UnusableOutput, dependencies, inspect_text, low_risk, matches,
+                     redact, safe_path, validate_changes)
+from .review import ci_green, judge, reviewable
 
 TERMINAL = {"DONE", "BLOCKED"}
 
@@ -130,9 +131,13 @@ class Engine:
         issue = self.current_issue(row, cfg, data)
         if phase == "QUEUED":
             meta = self.gh.metadata(repo)
-            data.update(base_branch=meta["default_branch"], branch=f"ado/issue-{row['issue']}", repairs=0,
-                        calls=0, base=self.gh.branch_head(repo, meta["default_branch"]))
-            self.build(row, data, cfg, issue, [])
+            if "base" not in data:
+                # A fresh job. A job that comes back to QUEUED after a rejected output
+                # keeps its counters: the call that was already billed must stay
+                # counted, or the budget could be exceeded by repeated retries.
+                data.update(base_branch=meta["default_branch"], branch=f"ado/issue-{row['issue']}",
+                            repairs=0, calls=0, base=self.gh.branch_head(repo, meta["default_branch"]))
+            self.build(row, data, cfg, issue, [], repair=bool(data.get("output_reason")))
         elif phase == "PUBLISHING":
             self.publish(row, data)
         elif phase in ("REVIEW", "AWAITING_HUMAN"):
@@ -144,30 +149,34 @@ class Engine:
                 self.activity(row, "review")
             if time.time() - data["review_started"] > self.config["review_timeout_seconds"]:
                 raise Blocked("Review/CI/human-merge deadline exceeded")
+            # The MiniMax review is a gate on the current head, so it runs as soon as the
+            # head is reviewable and its CI is green -- whatever else is outstanding. It
+            # used to run only when the evidence was otherwise completely clean, which
+            # stopped it from ever running once a finding from an earlier head was
+            # outstanding. The findings it returns join the repair feedback on the next pass.
+            if cfg.get("review_provider", "coderabbit") == "minimax" and phase == "REVIEW" and \
+                    not self.reviewed(data, current_digest) and \
+                    ci_green(pr, evidence, cfg) and reviewable(pr):
+                if self.reviewer is None:
+                    raise Blocked("MiniMax reviewer unavailable; no fallback")
+                self.verify_diff(row, data)
+                # Recoverable GitHub reads must happen before REVIEWING is persisted.
+                self.activity(row, "review")
+                originals, _ = self.gh.snapshot(repo, data["base"], cfg)
+                # Persist the in-flight review BEFORE using the subscription.
+                # Interrupted calls cannot be automatically replayed.
+                self.store.save(row, "REVIEWING", data)
+                result = self.reviewer.review(issue, originals, data["all_changes"], data["head"])
+                # The remote head and diff must remain identical during review.
+                fresh_pr = self.gh.pr(repo, data["pr"])
+                self.verify_pr(row, data, fresh_pr)
+                self.verify_diff(row, data)
+                data["minimax_review"] = {
+                    "sha": data["head"], "changes_digest": current_digest,
+                    "verdict": result["verdict"], "findings": result["findings"]}
+                self.store.save(row, "REVIEW", data)
+                return
             if decision == "WAIT":
-                if cfg.get("review_provider", "coderabbit") == "minimax" and phase == "REVIEW" and \
-                        feedback == ["missing MiniMax review at current SHA"] and \
-                        not pr.get("draft") and pr.get("mergeable") is True and \
-                        pr.get("mergeable_state") == "clean":
-                    if self.reviewer is None:
-                        raise Blocked("MiniMax reviewer unavailable; no fallback")
-                    self.verify_diff(row, data)
-                    # Recoverable GitHub reads must happen before REVIEWING is persisted.
-                    self.activity(row, "review")
-                    originals, _ = self.gh.snapshot(repo, data["base"], cfg)
-                    # Persist the in-flight review BEFORE using the subscription.
-                    # Interrupted calls cannot be automatically replayed.
-                    self.store.save(row, "REVIEWING", data)
-                    result = self.reviewer.review(issue, originals, data["all_changes"], data["head"])
-                    # The remote head and diff must remain identical during review.
-                    fresh_pr = self.gh.pr(repo, data["pr"])
-                    self.verify_pr(row, data, fresh_pr)
-                    self.verify_diff(row, data)
-                    data["minimax_review"] = {
-                        "sha": data["head"], "changes_digest": current_digest,
-                        "verdict": result["verdict"], "findings": result["findings"]}
-                    self.store.save(row, "REVIEW", data)
-                    return
                 # A previously clean, handed-off PR may regress when the base moves.
                 # A human would have to change the head to fix "behind"/"dirty",
                 # invalidating the job's SHA-bound identity. Revoke the handoff
@@ -184,9 +193,16 @@ class Engine:
                 if phase == "AWAITING_HUMAN":
                     raise Blocked("Review changed after handoff; human attention required")
                 if data["repairs"] >= self.config["max_repairs"]:
+                    # Every finding left is raised against an earlier head, so the model
+                    # has nothing new to act on: the repair that was just published is
+                    # what the reviewer has to look at. Wait for that human instead of
+                    # blocking the job on a budget it can no longer spend.
+                    if self.stale_only(feedback, data.get("head")):
+                        self.store.event(row["id"], "WAIT", stage="review",
+                                         reasons=["waiting for review threads to be resolved"])
+                        return
                     raise Blocked("Maximum repair attempts reached")
-                data["repairs"] += 1
-                self.build(row, data, cfg, issue, feedback)
+                self.build(row, data, cfg, issue, feedback, repair=True)
                 return
             # Re-fetch all evidence immediately before merge, tied to same PR and head.
             fresh = self.gh.pr(repo, data["pr"])
@@ -212,18 +228,15 @@ class Engine:
         else:
             raise Blocked("Unknown state")
 
-    def build(self, row, data, cfg, issue, feedback):
-        if data["calls"] >= 1 + self.config["max_repairs"]:
-            raise Blocked("Model call budget exhausted")
-        parent = data.get("head", data["base"])
-        self.activity(row, "context")
-        files, modes = self.gh.snapshot(row["repo"], parent, cfg)
-        data["calls"] += 1
-        self.store.save(row, "BUILDING", data)  # reserve budget BEFORE any model invocation
+    def usable(self, changes, cfg, files, modes, data):
+        """Check the output of a call that has already returned. Raises only UnusableOutput.
+
+        Everything here runs after the model call completed, so a failure means the answer
+        was rejected, not that a call was interrupted. That distinction is the whole reason
+        these raise a recoverable type: an interrupted call may already have been billed and
+        must never be replayed, while a completed one is spent either way.
+        """
         try:
-            self.activity(row, "implement", repairing=bool(feedback), file_count=len(files))
-            changes = self.agent.generate(issue, files, cfg, feedback)
-            self.activity(row, "validate")
             validate_changes(changes, cfg, files)
             for path in changes:
                 parts = path.split("/")
@@ -234,15 +247,156 @@ class Engine:
                     if i < len(parts) and mode == "100644":
                         raise Blocked("File used as parent directory")
             all_changes = {**data.get("all_changes", {}), **changes}
-            if len(all_changes) > cfg.get("max_files", 5) or sum(len(v.encode()) for v in all_changes.values()) > cfg.get("max_change_bytes", 50000):
+            if len(all_changes) > cfg.get("max_files", 5) or \
+                    sum(len(v.encode()) for v in all_changes.values()) > cfg.get("max_change_bytes", 50000):
                 raise Blocked("Cumulative change budget exceeded")
-            data.update(changes=changes, all_changes=all_changes, parent=parent,
-                        date=datetime.now(timezone.utc).isoformat(), intent_sha=None)
-            self.store.save(row, "PUBLISHING", data)
-        except BaseException:
-            # Keep BUILDING as resume phase after agent errors: no ambiguous automatic replay.
-            data["resume"] = "BUILDING"
-            raise
+        except UnicodeEncodeError as exc:
+            # A value that cannot be encoded as UTF-8 -- a lone surrogate in a JSON
+            # string, say -- can never be committed. The call completed, so this is a
+            # rejected answer, not an interrupted one: it must follow the bounded repair
+            # path instead of leaving the job in BUILDING, where a retry is refused.
+            raise UnusableOutput("Model output is not valid UTF-8 text") from exc
+        except Blocked as exc:
+            # One exit type for the whole post-call window, so build() can tell a rejected
+            # answer from an interrupted call without re-inspecting which check fired.
+            raise UnusableOutput(str(exc)) from exc
+        return all_changes
+
+    def reviewed(self, data, digest):
+        """Is there a MiniMax review bound to this head and this exact content?"""
+        review = data.get("minimax_review")
+        return isinstance(review, dict) and review.get("sha") == data.get("head") and \
+            review.get("changes_digest") == digest
+
+    def unchanged(self, changes, cfg, files):
+        """Is this a valid proposal that changes nothing?
+
+        The paths and the values are checked first: a malformed answer can compare
+        equal to the snapshot -- a null value where the snapshot has none -- and must
+        not be mistaken for a confirmation that there is nothing to do.
+        """
+        if not isinstance(changes, dict) or not changes:
+            return False
+        for path, content in changes.items():
+            if not isinstance(content, str):
+                return False
+            try:
+                safe_path(path)
+            except Blocked:
+                return False
+            if not matches(path, cfg["allowed_paths"]):
+                return False
+        return all(files.get(path) == content for path, content in changes.items())
+
+    def stale_only(self, feedback, head):
+        """Is every finding raised against a head other than the one being reviewed?"""
+        items = [item for item in feedback if isinstance(item, dict)]
+        return bool(items) and all(item.get("kind") == "thread" and item.get("sha") != head
+                                   for item in items)
+
+    def outstanding(self, feedback, head):
+        """Is there a finding that applies to the head that is being repaired?
+
+        A thread raised against an earlier head is stale, but it is still an outstanding
+        finding: the change it refers to may well survive in the current head. Only a
+        finding that applies to the current head obliges the model to change something.
+        """
+        return any(item.get("kind") != "thread" or item.get("sha") == head
+                   for item in feedback if isinstance(item, dict))
+
+    def settled_for(self, settled, findings, head):
+        """Has this head already been found to have nothing outstanding for these findings?
+
+        A thread a human resolved disappears from the findings, so the set shrinks. That
+        is not a new finding: the ones that remain were already evaluated against this
+        head, so the answer would be the same. A finding that is new or different is not
+        among the settled ones, and it must go back to the model.
+        """
+        if settled.get("head") != head:
+            return False
+        stored = settled.get("items")
+        if stored is None:
+            # A settlement recorded before the items were kept: compare it as a whole.
+            return settled.get("feedback") == digest(findings)
+        return set(digest(item) for item in findings) <= set(stored)
+
+    def build(self, row, data, cfg, issue, feedback, repair=False):
+        parent = data.get("head", data["base"])
+        # The review findings and the reason the last answer was rejected are kept apart.
+        # The reason is for the model only: it must not decide what counts as an
+        # outstanding finding, nor change which findings a head was settled against.
+        findings = list(feedback)
+        reason = data.get("output_reason")
+        model_feedback = findings + ([{"kind": "output", "body": reason}] if reason else [])
+        settled = data.get("settled") or {}
+        # A settlement is checked before the budget, because it spends no call. A job
+        # whose budget is spent but whose head has nothing outstanding must still be
+        # able to wait for a human rather than block on a budget it cannot spend.
+        if repair and not self.outstanding(findings, parent) and \
+                self.settled_for(settled, findings, parent):
+            # This head was already found to have nothing outstanding for these findings.
+            # Do not spend another model call to learn the same thing -- and do not charge
+            # a call to the budget either: no call is made here.
+            self.activity(row, "settled", reason="no change outstanding at this head")
+            self.store.save(row, "REVIEW", data)
+            return
+        if data["calls"] >= 1 + self.config["max_repairs"]:
+            raise Blocked("Model call budget exhausted")
+        self.activity(row, "context")
+        files, modes = self.gh.snapshot(row["repo"], parent, cfg)
+        data["calls"] += 1
+        if repair:
+            data["repairs"] += 1
+        data["output_reason"] = None            # the reason is now in the feedback
+        self.store.save(row, "BUILDING", data)  # reserve budget BEFORE any model invocation
+        try:
+            self.activity(row, "implement", repairing=bool(model_feedback), file_count=len(files))
+            changes = self.agent.generate(issue, files, cfg, model_feedback)
+            if repair and data.get("pr") and not self.outstanding(findings, parent) and \
+                    self.unchanged(changes, cfg, files):
+                # Every outstanding finding was raised against an earlier head and the
+                # current head already answers it, so the model had nothing to change.
+                # Publishing a no-op is forbidden; waiting for a human to resolve the stale
+                # threads is the correct outcome, and it must not cost a repair attempt.
+                # This only applies to a job that already published a pull request: before
+                # that, an answer that changes nothing is a refusal, and it is rejected as
+                # such rather than leaving a job with no pull request behind.
+                data["repairs"] -= 1
+                data["settled"] = {"head": parent, "feedback": digest(findings),
+                                   "items": [digest(item) for item in findings]}
+                self.activity(row, "settled", reason="no change outstanding at this head")
+                self.store.save(row, "REVIEW", data)
+                return
+            self.activity(row, "validate")
+            all_changes = self.usable(changes, cfg, files, modes, data)
+        except UnusableOutput as exc:
+            # The call completed and was billed; only its answer was rejected. Replaying
+            # spends another call, but the job is otherwise unrecoverable, so feed the
+            # reason back as one bounded repair instead of discarding published work.
+            #
+            # Every other failure escapes untouched: it happened before the call returned,
+            # so it may already have been billed and must not be replayed. The BUILDING
+            # state persisted above is what marks that -- retry() refuses to resume from it.
+            if data["repairs"] >= self.config["max_repairs"]:
+                raise
+            self.activity(row, "reject", reason=str(exc))
+            # Remember why the answer was rejected, so the next attempt -- this retry
+            # or a later repair driven by the review -- can tell the model. It is
+            # persisted before the state is restored, so a manual retry finds it too.
+            data["output_reason"] = str(exc)
+            # The call finished, so nothing is in flight. Restore a phase a human can
+            # retry from before the next build does any pre-call work: if that work
+            # fails transiently the job would otherwise be left in BUILDING, which
+            # retry() refuses as an interrupted call that was never interrupted.
+            self.store.save(row, "REVIEW" if data.get("pr") else "QUEUED", data)
+            # The original review findings are carried forward too. The retry is still
+            # working on the same findings; replacing them with the rejection reason
+            # alone left the model with no idea what it had been asked to fix.
+            self.build(row, data, cfg, issue, feedback, repair=True)
+            return
+        data.update(changes=changes, all_changes=all_changes, parent=parent,
+                    date=datetime.now(timezone.utc).isoformat(), intent_sha=None)
+        self.store.save(row, "PUBLISHING", data)
 
     def publish(self, row, data):
         self.activity(row, "publish")

@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import tempfile
@@ -67,6 +68,21 @@ class GitHubTests(unittest.TestCase):
             self.assertIn("page=2", api.call_args.args[0])
         with patch.object(gh, "api", return_value=[{}] * 100), self.assertRaises(Blocked):
             gh.pages("repos/owner/project/pulls")
+
+    def test_context_naming_a_primitive_is_readable_but_a_secret_is_not(self):
+        # Regression: this repository's docs/verification.md mentions subprocess., and
+        # snapshot() refused it as model context, so no job could start here at all.
+        prose = "The old reader thread called subprocess.run; drain() replaced it."
+        tree = {"tree": [{"path": "docs/notes.md", "type": "blob", "mode": "100644",
+                          "size": len(prose), "sha": "b1"}]}
+        blob = lambda text: {"content": base64.b64encode(text.encode()).decode()}
+        gh = GitHub()
+        with patch.object(gh, "api", side_effect=[tree, blob(prose)]):
+            files, _ = gh.snapshot("owner/project", "head", repo_config())
+        self.assertEqual(files, {"docs/notes.md": prose})
+        with patch.object(gh, "api", side_effect=[tree, blob("github_pat_" + "x" * 50)]):
+            with self.assertRaises(Blocked):
+                gh.snapshot("owner/project", "head", repo_config())
 
     def test_private_repositories_rejected(self):
         gh = GitHub()

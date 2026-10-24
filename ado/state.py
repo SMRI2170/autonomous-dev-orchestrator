@@ -108,8 +108,9 @@ class Store:
         if not row or row["state"] != "BLOCKED":
             raise Blocked("Only an explicitly selected BLOCKED job can be retried")
         data = json.loads(row["data"])
-        if data.get("repairs", 0) >= 3:
-            raise Blocked("Repair budget exhausted; create a new, reviewed issue")
+        # The repair budget is the engine's business: only a repair actually spends one.
+        # Refusing here on a counter would make a retry-safe failure -- a transient
+        # publish, evidence or issue-close error -- permanently unrecoverable.
         phase = data.get("resume", "QUEUED")
         # Never replay an agent call after interruption; a human must inspect it.
         if phase in ("BUILDING", "REVIEWING"):

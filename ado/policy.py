@@ -2,11 +2,21 @@
 import fnmatch
 import json
 import re
+from collections import Counter
 from pathlib import PurePosixPath
 
 
 class Blocked(RuntimeError):
     pass
+
+
+class UnusableOutput(Blocked):
+    """The model call finished and was billed; only its output was rejected.
+
+    Distinct from an in-flight failure. An interrupted call must never be replayed,
+    but a completed one is already spent either way, so a bounded repair attempt
+    recovers the job instead of discarding the work it has already published.
+    """
 
 
 SECRET = re.compile(
@@ -19,7 +29,7 @@ PROTECTED = re.compile(
     r"(?i)(?:^|/)(?:\.[^/]+|agents\.md|claude\.md|gemini\.md|"
     r".*(?:secret|credential|password|permission|entitlement|auth|security|policy|"
     r"keychain|token|migration|billing|payment|deploy|dockerfile|makefile|"
-    r"package|lock|pubspec|requirements|pyproject|setup|gradle|podfile|gemfile).*)(?:/|$)|"
+    r"package|lock|pubspec|requirements|pyproject|setup\.(?:py|cfg)|gradle|podfile|gemfile).*)(?:/|$)|"
     r"(?i:\.(?:pem|key|p12|pfx|keystore|mobileprovision|sh|bash|zsh|ps1|bat|exe|plist)$)"
 )
 DANGEROUS = re.compile(
@@ -50,12 +60,47 @@ def safe_path(path):
     return path
 
 
-def inspect_text(text):
+def inspect_source(text):
+    """Check text read back from the repository before it becomes model context.
+
+    Credentials are refused: they would otherwise ride into the prompt and could be
+    echoed back into an output change. A committed file that merely *names* a
+    dangerous primitive is ordinary documentation -- a security note, a migration log,
+    our own verification history -- and refusing it made the orchestrator unable to
+    read its own repository. inspect_text keeps the stricter rule for model output.
+    """
     if not isinstance(text, str) or "\x00" in text:
         raise Blocked("Only UTF-8 text files are supported")
     if SECRET.search(text):
         raise Blocked("Potential secret detected")
-    if DANGEROUS.search(text):
+
+
+def dangerous_counts(text):
+    """How often each dangerous primitive appears in the text."""
+    return Counter(DANGEROUS.findall(text))
+
+
+def inspect_text(text, previous=None, documentation=False):
+    """Check text the model proposed, which may become executable project content.
+
+    Documentation may repeat what the repository already says: this repository's own
+    verification record names a dangerous primitive, because it documents an incident,
+    and the model must still be able to correct that file. So for documentation the
+    check asks what the change *adds* -- every primitive the new content has must
+    already be in the old content, as often. A reworded sentence is fine, a second
+    mention is not, and a different primitive is not either.
+
+    Code keeps the stricter rule: a file that contains a primitive at all is refused,
+    so a change can never trade one primitive for another. A new file is checked whole,
+    because everything in it is new. A credential is refused whatever the file already
+    contained.
+    """
+    inspect_source(text)
+    if previous is None or not documentation:
+        if DANGEROUS.search(text):
+            raise Blocked("Dangerous command or execution primitive detected")
+        return
+    if dangerous_counts(text) - dangerous_counts(previous):
         raise Blocked("Dangerous command or execution primitive detected")
 
 
@@ -67,7 +112,7 @@ def validate_changes(changes, config, snapshot):
         safe_path(path)
         if not matches(path, config["allowed_paths"]):
             raise Blocked("File outside configured allowlist: " + path)
-        inspect_text(content)
+        inspect_text(content, snapshot.get(path), documentation=path.endswith('.md'))
         size += len(content.encode())
         if snapshot.get(path) == content:
             raise Blocked("Unchanged file returned: " + path)
