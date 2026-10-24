@@ -494,6 +494,90 @@ class EngineTests(unittest.TestCase):
         self.assertIn("Unchanged file", data.get("reason", ""))
         self.assertNotEqual(self.store.get("owner/project", 1)["state"], "REVIEW")
 
+    def test_a_settled_head_is_not_blocked_by_the_call_budget(self):
+        # Regression: the call budget was checked before the settlement. A job whose
+        # budget was spent while its head had nothing outstanding blocked on the
+        # budget instead of waiting for the human that has to resolve the stale
+        # thread -- and a retry could not fix it, because the budget was spent.
+        self.cfg["max_repairs"] = 1
+        content = "# Glossary\nPR: pull request. Revision 1.\n"
+        calls = []
+
+        def generate(issue, files, config, feedback):
+            calls.append(feedback)
+            return {"docs/glossary.md": content} if len(calls) == 1 else dict(files)
+
+        self.agent.generate = generate
+        self.gh.threads = [{"isResolved": False, "isOutdated": True,
+                            "comments": {"nodes": [{"body": "old finding", "commit": {"oid": "old"}}]}}]
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "REVIEW")       # settles on the first stale finding
+        self.assertEqual(len(calls), 2)
+        # The budget is spent now (two calls, one repair allowed), but the head has
+        # nothing outstanding: the job keeps waiting for the human.
+        self.assertEqual(self.tick(), "REVIEW")
+        record = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(record["calls"], 2)
+        self.assertNotIn("budget", record.get("reason", ""))
+        self.assertEqual(len(calls), 2)
+
+    def test_a_resolved_thread_does_not_invalidate_the_settlement(self):
+        # Regression: the settlement remembered a digest of the whole finding set, so a
+        # human resolving one of two stale threads changed that digest. Every partial
+        # resolution cost another model call, and the job ran out of budget with a
+        # thread still open. A finding that is gone is not a new finding.
+        content = "# Glossary\nPR: pull request. Revision 1.\n"
+        calls = []
+
+        def generate(issue, files, config, feedback):
+            calls.append(feedback)
+            return {"docs/glossary.md": content} if len(calls) == 1 else dict(files)
+
+        self.agent.generate = generate
+        self.gh.threads = [
+            {"isResolved": False, "isOutdated": True,
+             "comments": {"nodes": [{"body": "first finding", "commit": {"oid": "old"}}]}},
+            {"isResolved": False, "isOutdated": True,
+             "comments": {"nodes": [{"body": "second finding", "commit": {"oid": "old"}}]}}]
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(len(calls), 2)
+        # A human resolves one of the two stale threads. The other one was already
+        # evaluated against this head, so no new call is needed.
+        self.gh.threads[0]["isResolved"] = True
+        self.assertEqual(self.tick(), "REVIEW")
+        record = json.loads(self.store.get("owner/project", 1)["data"])
+        self.assertEqual(record["calls"], 2)
+        self.assertEqual(len(calls), 2)
+        # A finding that is new is not settled, so it still reaches the model.
+        self.gh.threads[1]["comments"]["nodes"][0]["body"] = "changed finding"
+        self.assertEqual(self.tick(), "REVIEW")
+        self.assertEqual(len(calls), 3)
+        self.assertIn("changed finding", calls[2][0]["body"])
+
+    def test_a_value_that_cannot_be_encoded_is_rejected_as_unusable_output(self):
+        # Regression: a completed answer holding a lone surrogate raised
+        # UnicodeEncodeError while the byte budget was computed. That is not a
+        # Blocked, so the job was left in BUILDING: a manual retry was refused as an
+        # interrupted call that never happened, and the answer was never rejected as
+        # the unusable answer it was.
+        calls = []
+
+        def generate(issue, files, config, feedback):
+            calls.append(feedback)
+            if len(calls) == 1:
+                return {"docs/glossary.md": "\ud800"}
+            return {"docs/glossary.md": "# Glossary\nPR: pull request.\n"}
+
+        self.agent.generate = generate
+        self.assertEqual(self.tick(), "PUBLISHING")
+        self.assertEqual(self.store.get("owner/project", 1)["state"], "PUBLISHING")
+        self.assertEqual(len(calls), 2)
+        # The model was told why its answer was refused.
+        self.assertTrue(any(item.get("kind") == "output" for item in calls[1]))
+
     def test_unusable_output_is_repaired_instead_of_blocking_the_job(self):
         # Regression: real job 2 died "Agent must return a single strict JSON object with
         # files" after publishing PR #13, because every agent error was recorded as an

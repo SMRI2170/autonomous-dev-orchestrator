@@ -250,6 +250,12 @@ class Engine:
             if len(all_changes) > cfg.get("max_files", 5) or \
                     sum(len(v.encode()) for v in all_changes.values()) > cfg.get("max_change_bytes", 50000):
                 raise Blocked("Cumulative change budget exceeded")
+        except UnicodeEncodeError as exc:
+            # A value that cannot be encoded as UTF-8 -- a lone surrogate in a JSON
+            # string, say -- can never be committed. The call completed, so this is a
+            # rejected answer, not an interrupted one: it must follow the bounded repair
+            # path instead of leaving the job in BUILDING, where a retry is refused.
+            raise UnusableOutput("Model output is not valid UTF-8 text") from exc
         except Blocked as exc:
             # One exit type for the whole post-call window, so build() can tell a rejected
             # answer from an interrupted call without re-inspecting which check fired.
@@ -298,9 +304,23 @@ class Engine:
         return any(item.get("kind") != "thread" or item.get("sha") == head
                    for item in feedback if isinstance(item, dict))
 
+    def settled_for(self, settled, findings, head):
+        """Has this head already been found to have nothing outstanding for these findings?
+
+        A thread a human resolved disappears from the findings, so the set shrinks. That
+        is not a new finding: the ones that remain were already evaluated against this
+        head, so the answer would be the same. A finding that is new or different is not
+        among the settled ones, and it must go back to the model.
+        """
+        if settled.get("head") != head:
+            return False
+        stored = settled.get("items")
+        if stored is None:
+            # A settlement recorded before the items were kept: compare it as a whole.
+            return settled.get("feedback") == digest(findings)
+        return set(digest(item) for item in findings) <= set(stored)
+
     def build(self, row, data, cfg, issue, feedback, repair=False):
-        if data["calls"] >= 1 + self.config["max_repairs"]:
-            raise Blocked("Model call budget exhausted")
         parent = data.get("head", data["base"])
         # The review findings and the reason the last answer was rejected are kept apart.
         # The reason is for the model only: it must not decide what counts as an
@@ -309,15 +329,19 @@ class Engine:
         reason = data.get("output_reason")
         model_feedback = findings + ([{"kind": "output", "body": reason}] if reason else [])
         settled = data.get("settled") or {}
+        # A settlement is checked before the budget, because it spends no call. A job
+        # whose budget is spent but whose head has nothing outstanding must still be
+        # able to wait for a human rather than block on a budget it cannot spend.
         if repair and not self.outstanding(findings, parent) and \
-                settled.get("head") == parent and settled.get("feedback") == digest(findings):
-            # This head was already found to have nothing outstanding for exactly these
-            # findings, and neither the head nor the findings have changed. Do not spend
-            # another model call to learn the same thing -- and do not charge a call to
-            # the budget either: no call is made here.
+                self.settled_for(settled, findings, parent):
+            # This head was already found to have nothing outstanding for these findings.
+            # Do not spend another model call to learn the same thing -- and do not charge
+            # a call to the budget either: no call is made here.
             self.activity(row, "settled", reason="no change outstanding at this head")
             self.store.save(row, "REVIEW", data)
             return
+        if data["calls"] >= 1 + self.config["max_repairs"]:
+            raise Blocked("Model call budget exhausted")
         self.activity(row, "context")
         files, modes = self.gh.snapshot(row["repo"], parent, cfg)
         data["calls"] += 1
@@ -338,7 +362,8 @@ class Engine:
                 # that, an answer that changes nothing is a refusal, and it is rejected as
                 # such rather than leaving a job with no pull request behind.
                 data["repairs"] -= 1
-                data["settled"] = {"head": parent, "feedback": digest(findings)}
+                data["settled"] = {"head": parent, "feedback": digest(findings),
+                                   "items": [digest(item) for item in findings]}
                 self.activity(row, "settled", reason="no change outstanding at this head")
                 self.store.save(row, "REVIEW", data)
                 return
