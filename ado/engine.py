@@ -236,6 +236,10 @@ class Engine:
         these raise a recoverable type: an interrupted call may already have been billed and
         must never be replayed, while a completed one is spent either way.
         """
+        # An empty strict changes object is an explicit refusal. Check it before the
+        # policy validation, which reports empty and oversized sets with one reason.
+        if not changes:
+            raise UnusableOutput("Model refused the task (no changes proposed)")
         try:
             validate_changes(changes, cfg, files)
             for path in changes:
@@ -295,23 +299,12 @@ class Engine:
                                    for item in items)
 
     def outstanding(self, feedback, head):
-        """Is there a finding that applies to the head that is being repaired?
-
-        A thread raised against an earlier head is stale, but it is still an outstanding
-        finding: the change it refers to may well survive in the current head. Only a
-        finding that applies to the current head obliges the model to change something.
-        """
+        """Is there a finding that applies to the head that is being repaired?"""
         return any(item.get("kind") != "thread" or item.get("sha") == head
                    for item in feedback if isinstance(item, dict))
 
     def settled_for(self, settled, findings, head):
-        """Has this head already been found to have nothing outstanding for these findings?
-
-        A thread a human resolved disappears from the findings, so the set shrinks. That
-        is not a new finding: the ones that remain were already evaluated against this
-        head, so the answer would be the same. A finding that is new or different is not
-        among the settled ones, and it must go back to the model.
-        """
+        """Has this head already been found to have nothing outstanding for these findings?"""
         if settled.get("head") != head:
             return False
         stored = settled.get("items")
