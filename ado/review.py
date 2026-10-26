@@ -131,6 +131,12 @@ def judge(pr, evidence, config, minimax_review=None, changes_digest=None):
         return "REPAIR", feedback
     if waiting:
         return "WAIT", waiting
-    if pr.get("draft") or pr.get("mergeable") is not True or pr.get("mergeable_state") != "clean":
+    # The head must be stable: not a draft, not conflicted, not behind. A pending
+    # third-party status ("unstable") is somebody else's bot, and an unresolved
+    # review thread ("blocked") is the human gate this tool leaves in place.
+    # Requiring "clean" here made the job wait forever on a repository whose
+    # optional bot reports a status that never settles, while reviewable(),
+    # which decides whether the model may review a head, already allows it.
+    if not reviewable(pr):
         return "WAIT", ["PR is draft, conflicted, behind or mergeability is unknown"]
     return "PASS", []
