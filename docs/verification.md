@@ -292,7 +292,7 @@ CodeRabbit Appのこの新規repoへの接続もユーザーが完了し、PR #6
 ### 完了時点の状態（2026-10-25）
 
 - バックログは0件です。OPEN の Issue と PR はなく、ADO が作った `ado/issue-*` のブランチも残っていません。
-- ローカルのテストは172件成功し、`python -m compileall -q ado scripts tests` と `node --check ado/web/app.js` も成功します。
+- ローカルのテストは204件成功し、`python -m compileall -q ado scripts tests` と `node --check ado/web/app.js` も成功します。
 - 常駐は2本で、どちらも `launchctl list` に表示されています。pilot は `local.ado.worker`（`dry_run = true`、対象 `SMRI2170/animal-shadow-match`）、live は `local.ado.worker.live`（`dry_run = false`、対象 `SMRI2170/autonomous-dev-orchestrator`）です。
 - ダッシュボードの既定ポート 8765 は他アプリと衝突し得るため、実運用では別ポートを指定して起動します。
 
