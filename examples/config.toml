@@ -33,6 +33,9 @@ max_context_bytes = 150000
 # The budget measures the bytes the model writes: a patch costs its payload, a full
 # replacement costs the whole file.
 max_change_bytes = 50000
+# One file in the prompt is capped separately, so a large document can be edited
+# when the total budget has room for it.
+max_context_file_bytes = 50000
 required_checks = [{name = "unit", app = "github-actions"}]
 # "minimax" runs a fresh tool-less local review with your existing subscription,
 # and ALWAYS requires human merging. Set "coderabbit" for the legacy bot gate.
