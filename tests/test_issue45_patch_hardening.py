@@ -97,6 +97,32 @@ class CumulativeBudgetTests(unittest.TestCase):
         finally:
             temp.cleanup()
 
+    def test_a_job_without_recorded_costs_is_seeded_from_what_it_published(self):
+        # Regression: a job that started before the costs were recorded holds the
+        # content it published but no cost for it, so the first repair counted only
+        # the repair and not the published work.
+        temp = tempfile.TemporaryDirectory()
+        try:
+            cfg = config(temp.name)
+            cfg["repositories"][0]["max_change_bytes"] = 100
+            store = Store(temp.name)
+            gh = GitHub()
+            gh.files = {"docs/glossary.md": ORIGINAL}
+            engine = Engine(cfg, store, gh, None)
+            changes = parse_changes(json.dumps({"patches": {"docs/glossary.md": [
+                {"op": "replace", "search": "PR: pull request.", "replace": "P" * 30}]}}),
+                {"docs/glossary.md": ORIGINAL})
+            # The job published 80 bytes before this change existed, and it has no
+            # recorded cost for them.
+            data = {"all_changes": {"docs/glossary.md": "P" * 80}}
+            with self.assertRaises(UnusableOutput) as raised:
+                engine.usable(changes, cfg["repositories"][0], gh.files,
+                              {"docs/glossary.md": "100644"}, data)
+            self.assertIn("Change byte budget exceeded", str(raised.exception))
+            store.db.close()
+        finally:
+            temp.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main()

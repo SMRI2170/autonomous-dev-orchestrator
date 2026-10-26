@@ -9,6 +9,20 @@ from .review import ci_green, judge, reviewable
 TERMINAL = {"DONE", "BLOCKED"}
 
 
+def seeded_costs(data):
+    """The per-path cost a job had before the round that is being built.
+
+    A job that started before the costs were recorded holds the content it
+    published but no cost for it. Those paths are seeded with the size of what
+    was published, so the budget of such a job covers the work it already did
+    instead of starting over at the first repair.
+    """
+    costs = dict(data.get("costs") or {})
+    for path, content in (data.get("all_changes") or {}).items():
+        costs.setdefault(path, len(content.encode()))
+    return costs
+
+
 def redact_title(title):
     return redact(" ".join(title.split()))[:180]
 
@@ -290,7 +304,12 @@ class Engine:
             # writes to a file an earlier round already wrote, and the budget has to
             # cover both. Counting only the latest round would let a job write twice
             # its budget by splitting the work over two rounds.
-            costs = accumulate_costs(data.get("costs", {}), changes)
+            #
+            # A job that started before the costs were recorded has no cost for the
+            # paths it already published, so those are seeded from what it published
+            # before the new round is added. Without that, the first repair of an
+            # older job would count only the repair and not the published work.
+            costs = accumulate_costs(seeded_costs(data), changes)
             spent = 0
             for path, content in all_changes.items():
                 spent += costs.get(path, len(content.encode()))
@@ -440,9 +459,12 @@ class Engine:
             # alone left the model with no idea what it had been asked to fix.
             self.build(row, data, cfg, issue, feedback, repair=True)
             return
+        # The seeded costs are read before all_changes is replaced, so they describe
+        # the rounds that came before this one.
+        costs = accumulate_costs(seeded_costs(data), changes)
         data.update(changes=changes, all_changes=all_changes, parent=parent,
                     date=datetime.now(timezone.utc).isoformat(), intent_sha=None,
-                    costs=accumulate_costs(data.get("costs", {}), changes))
+                    costs=costs)
         self.store.save(row, "PUBLISHING", data)
 
     def publish(self, row, data):
