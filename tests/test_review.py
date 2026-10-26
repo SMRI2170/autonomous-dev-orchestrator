@@ -128,6 +128,21 @@ class ReviewTests(unittest.TestCase):
             self.pr["mergeable"] = value
             self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "WAIT")
 
+    def test_a_pending_third_party_status_does_not_hold_the_job(self):
+        # Regression: the verdict required mergeable_state == "clean", so a repository
+        # whose optional bot reports a status that never settles left the job waiting
+        # forever, even though the head was stable and every required check was green.
+        for state in ("unstable", "blocked"):
+            with self.subTest(state=state):
+                self.pr["mergeable_state"] = state
+                self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "PASS")
+
+    def test_an_unstable_head_never_passes(self):
+        for state in ("behind", "dirty", "unknown", "draft", "has_hooks"):
+            with self.subTest(state=state):
+                self.pr["mergeable_state"] = state
+                self.assertEqual(judge(self.pr, self.ev, self.cfg)[0], "WAIT")
+
     def test_comment_does_not_clear_previous_human_change_request(self):
         self.ev["reviews"] += [
             {"id": 2, "user": {"login": "human", "type": "User"}, "commit_id": "head",
