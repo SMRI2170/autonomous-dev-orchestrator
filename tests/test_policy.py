@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from ado.config import load
-from ado.policy import (Blocked, dependencies, inspect_source, inspect_text, low_risk, parse_changes,
-                        redact, safe_path, validate_changes)
+from ado.policy import (Blocked, UnusableOutput, dependencies, inspect_source, inspect_text, low_risk,
+                        parse_changes, redact, safe_path, validate_changes)
 from tests.fakes import repo_config
 
 
@@ -126,9 +126,28 @@ class PolicyTests(unittest.TestCase):
     def test_strict_agent_contract(self):
         self.assertEqual(parse_changes('{"files":{"docs/a.md":"ok"}}'), {"docs/a.md": "ok"})
         for text in ['```json\n{}\n```', '{"files":{},"command":"whoami"}', '{"files":{},"files":{}}',
-                     '{"files":{"a":"x","a":"y"}}', '[]', 'null']:
+                     '{"files":{"a":"x","a":"y"}}', '[]', 'null',
+                     '{"patches":{},"other":1}']:
             with self.subTest(text=text), self.assertRaises(Blocked):
                 parse_changes(text)
+
+    def test_new_files_and_patches_can_be_answered_together(self):
+        # An issue that creates a file and changes another has to be answerable in
+        # one answer, or the first answer publishes half of the work.
+        changes = parse_changes('{"files":{"docs/new.md":"new\\n"},'
+                                '"patches":{"docs/old.md":[{"op":"replace",'
+                                '"search":"old","replace":"new"}]}}',
+                                {"docs/old.md": "old\n"})
+        self.assertEqual(changes["docs/new.md"], "new\n")
+        self.assertEqual(changes["docs/old.md"], "new\n")
+
+    def test_a_path_cannot_be_both_written_and_patched(self):
+        with self.assertRaises(UnusableOutput) as raised:
+            parse_changes('{"files":{"docs/a.md":"x\\n"},'
+                           '"patches":{"docs/a.md":[{"op":"replace",'
+                           '"search":"old","replace":"new"}]}}',
+                           {"docs/a.md": "old\n"})
+        self.assertIn("cannot be both written and patched", str(raised.exception))
 
     def test_dependencies(self):
         self.assertEqual(dependencies("Depends-On: #12, #13\nDepends-On: #12"), [12, 13])
@@ -147,6 +166,38 @@ trusted_authors = ["owner"]
 ''')
             repo = load(path)["repositories"][0]
             self.assertNotIn("review_provider", repo)
+
+    def test_the_per_file_limit_default_does_not_change_the_policy_hash(self):
+        # Regression: writing the default into the configuration changed the policy
+        # hash of a job that was already running, and the job stopped as changed.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text('''[[repositories]]
+name = "owner/project"
+allowed_paths = ["docs/**/*.md"]
+trusted_authors = ["owner"]
+''')
+            repo = load(path)["repositories"][0]
+            self.assertNotIn("max_context_file_bytes", repo)
+
+    def test_the_per_file_limit_is_validated_when_it_is_given(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text('''[[repositories]]
+name = "owner/project"
+allowed_paths = ["docs/**/*.md"]
+trusted_authors = ["owner"]
+max_context_file_bytes = 120000
+''')
+            self.assertEqual(load(path)["repositories"][0]["max_context_file_bytes"], 120000)
+            path.write_text('''[[repositories]]
+name = "owner/project"
+allowed_paths = ["docs/**/*.md"]
+trusted_authors = ["owner"]
+max_context_file_bytes = 10
+''')
+            with self.assertRaises(Blocked):
+                load(path)
 
     def test_review_provider_validation(self):
         with tempfile.TemporaryDirectory() as tmp:

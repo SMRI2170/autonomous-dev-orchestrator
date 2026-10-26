@@ -90,7 +90,7 @@ class GitHub:
                 continue
             if item["mode"] != "100644":
                 continue
-            if item.get("size", 0) > 50000:
+            if item.get("size", 0) > config.get("max_context_file_bytes", 50000):
                 raise Blocked("Context file too large: " + path)
             blob = self.api(f"repos/{repo}/git/blobs/{item['sha']}")
             try:

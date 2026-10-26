@@ -60,7 +60,7 @@ http://127.0.0.1:8765/ でIssueごとの現在地、実装している内容、�
 | 機能 | MVPの状態 |
 |---|---|
 | 複数対象のTOML登録、Issue opt-in、仕様・依存チェック | 実装済み。単一リポジトリ内の`Depends-On: #12, #13`のみ |
-| MiniMax実装・修正 | `mcode exec --mode lightweight`の変更JSONアダプター実装。0.6.12 Token Planで単発生成を検証済み。実PRの修正ループ（Issue #16 / #18、#24、#34、#39）も実サービスで検証済み |
+| MiniMax実装・修正 | `mcode exec --mode lightweight`の変更JSONアダプター実装。既存ファイルは差分（patch）で書き換えて、触らない行を動かしません。0.6.12 Token Planで単発生成を検証済み。実PRの修正ループ（Issue #16 / #18、#24、#34、#39）も実サービスで検証済み |
 | 分離 | toolsなし、環境変数を限定、macOS Seatbelt、対象cloneなし。危険コマンド実行経路なし |
 | ブランチ・PR・CI・レビュー取得 | GitHub REST/GraphQL実装。全ページを上限付きで取得、欠落時は不合格 |
 | 修正上限・冪等性・再起動 | 初回+最大3回。予算を呼び出し前に保存。publish意図・commitを永続化 |

@@ -114,6 +114,25 @@ class GitHubTests(unittest.TestCase):
             files, _ = gh.snapshot("owner/project", "head", repo_config())
         self.assertEqual(len(files), 4)
 
+    def test_a_single_large_file_needs_a_raised_per_file_limit(self):
+        # A file that is larger than the per-file limit cannot be edited at all,
+        # even when the total budget has room for it. The limit is separate so an
+        # operator can raise it for a repository with a large document.
+        prose = "x" * 60000
+        tree = {"tree": [{"path": "docs/notes.md", "type": "blob", "mode": "100644",
+                          "size": len(prose), "sha": "b1"}]}
+        blob = lambda text: {"content": base64.b64encode(text.encode()).decode()}
+        gh = GitHub()
+        with patch.object(gh, "api", side_effect=[tree, blob(prose)]):
+            with self.assertRaises(Blocked) as caught:
+                gh.snapshot("owner/project", "head", repo_config())
+        self.assertIn("Context file too large", str(caught.exception))
+
+        cfg = dict(repo_config(), max_context_file_bytes=100000, max_context_bytes=200000)
+        with patch.object(gh, "api", side_effect=[tree, blob(prose)]):
+            files, _ = gh.snapshot("owner/project", "head", cfg)
+        self.assertIn("docs/notes.md", files)
+
     def test_private_repositories_rejected(self):
         gh = GitHub()
         with patch.object(gh, "api", return_value={"private": True}), self.assertRaises(Blocked):

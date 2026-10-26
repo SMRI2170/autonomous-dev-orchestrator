@@ -46,6 +46,14 @@ def load(path):
             if set(check) != {"name", "app"} or check["app"] != "github-actions":
                 raise Blocked("MVP requires named GitHub Actions checks")
         repo.setdefault("context_paths", ["README.md"])
+        # The per-file limit bounds one file in the prompt. It is separate from the
+        # total, so a large file can be edited when the total budget allows it.
+        # The default stays implicit: writing it into the configuration would change
+        # the policy hash of a job that is already running, and the job would stop as
+        # changed. It is applied where the limit is read instead.
+        limit = repo.get("max_context_file_bytes", 50000)
+        if type(limit) is not int or not 1000 <= limit <= 2000000:
+            raise Blocked("Invalid max_context_file_bytes")
         if type(repo.get("auto_merge", False)) is not bool:
             raise Blocked("repository auto_merge must be boolean")
     # No API-key/provider fallback is implemented. Existing subscription login only.

@@ -124,6 +124,46 @@ def parses(path, content):
         raise Blocked("Changed file cannot be compiled: " + path) from exc
 
 
+class Changes(dict):
+    """The resolved changes of one answer, with the bytes the model wrote for each path.
+
+    A patch writes only the changed parts, so its cost is the patch payload. A full
+    replacement writes the whole file, so its cost is the file. The mapping interface
+    is the one the engine has always used; the costs only feed the change budget.
+    """
+
+    def __init__(self, mapping, costs=None):
+        super().__init__(mapping)
+        self.costs = dict(costs or {})
+
+    def cost_of(self, path, content):
+        return self.costs.get(path, len(content.encode()))
+
+
+def cost_of(changes, path, content):
+    """The bytes the model wrote for one path of one answer.
+
+    An answer that carries its costs says so; any other mapping is measured by
+    the content it holds, which is what a full replacement costs.
+    """
+    if isinstance(changes, Changes):
+        return changes.cost_of(path, content)
+    return len(content.encode())
+
+
+def accumulate_costs(previous, changes):
+    """The per-path byte total of a job after one more answer.
+
+    A path can be written more than once in a job: a repair round rewrites what
+    an earlier round wrote. The budget must count both, or a job could spend
+    twice its budget on one file by splitting the work across rounds.
+    """
+    total = dict(previous or {})
+    for path, content in changes.items():
+        total[path] = total.get(path, 0) + cost_of(changes, path, content)
+    return total
+
+
 def validate_changes(changes, config, snapshot):
     if not isinstance(changes, dict) or not changes or len(changes) > config.get("max_files", 5):
         raise Blocked("Empty/oversized change set")
@@ -134,11 +174,42 @@ def validate_changes(changes, config, snapshot):
             raise Blocked("File outside configured allowlist: " + path)
         inspect_text(content, snapshot.get(path), documentation=path.endswith('.md'))
         parses(path, content)
-        size += len(content.encode())
+        # The budget measures what the model wrote. A patch writes only the changed
+        # parts, so its cost is the payload; a full replacement writes the whole file,
+        # so its cost is the file. Both are the bytes the model authored.
+        size += cost_of(changes, path, content)
         if snapshot.get(path) == content:
             raise Blocked("Unchanged file returned: " + path)
     if size > config.get("max_change_bytes", 50000):
         raise Blocked("Change byte budget exceeded")
+    context_limits(changes, config, snapshot)
+
+
+def context_limits(changes, config, snapshot):
+    """Check the resolved files against the limits the context will be read under.
+
+    A file that this job publishes is read back into the context of the next
+    round, and the reading applies limits: one per file, and one for the whole
+    context. A change that pushes a file or the context past those limits would
+    leave the job unable to continue after it published, so the limits are
+    checked here, where the model can still correct the change.
+    """
+    per_file = config.get("max_context_file_bytes", 50000)
+    total_budget = config.get("max_context_bytes", 300000)
+    total = 0
+    for path, content in changes.items():
+        written = len(content.encode())
+        if written > per_file:
+            raise Blocked("Resolved file exceeds the per-file context limit: %s (%d bytes > %d)"
+                          % (path, written, per_file))
+        total += written
+    for path, content in snapshot.items():
+        if path not in changes:
+            total += len(content.encode())
+    if total > total_budget:
+        raise Blocked("Context budget exceeded: %d bytes of context, budget %d; "
+                      "narrow allowed_paths/context_paths or raise max_context_bytes"
+                      % (total, total_budget))
 
 
 def low_risk(changes, config):
@@ -147,7 +218,21 @@ def low_risk(changes, config):
                matches(p, config.get("auto_merge_paths", [])) for p in changes)
 
 
-def parse_changes(output):
+def parse_changes(output, snapshot=None):
+    """Read the agent's answer.
+
+    These shapes are accepted:
+
+    {"files": {"path": "complete content"}} -- the whole file is written.
+    {"patches": {"path": [operations]}} -- only the changed parts are written.
+    {"files": {...}, "patches": {...}} -- both at once, for an issue that creates
+    a file and changes another. The two sets of paths must not overlap: a file
+    is either written whole or patched, never both.
+
+    The returned mapping is the resolved content per path. A patch is resolved
+    against the files that exist now, so the result is the file as it will be
+    committed, and the bytes the model wrote for each path travel with it.
+    """
     try:
         def unique(pairs):
             result = {}
@@ -157,11 +242,122 @@ def parse_changes(output):
                 result[key] = val
             return result
         data = json.loads(output, object_pairs_hook=unique)
-        if set(data) != {"files"} or not isinstance(data["files"], dict):
-            raise ValueError("Expected only files object")
-        return data["files"]
+        keys = set(data)
+        if not keys or not keys <= {"files", "patches"}:
+            raise ValueError("Expected only files object or patches object")
+        files = data.get("files", {})
+        patches = data.get("patches", {})
+        if not isinstance(files, dict) or not isinstance(patches, dict):
+            raise ValueError("files and patches must be objects")
+        for content in files.values():
+            if not isinstance(content, str):
+                raise ValueError("File content must be a string")
+        overlap = set(files) & set(patches)
+        if overlap:
+            # A file that is written whole and patched at the same time has no
+            # defined result, so the answer is refused rather than guessed.
+            raise UnusableOutput("A path cannot be both written and patched: "
+                                  + ", ".join(sorted(overlap)))
+        resolved, costs = {}, {}
+        if patches:
+            if snapshot is None:
+                raise ValueError("Patches need the current files")
+            patched = resolve_patches(patches, snapshot)
+            resolved.update(patched)
+            costs.update(patched.costs)
+        for path, content in files.items():
+            resolved[path] = content
+            costs[path] = len(content.encode())
+        return Changes(resolved, costs)
+    except UnusableOutput:
+        raise
     except (ValueError, TypeError) as exc:
-        raise Blocked("Agent must return a single strict JSON object with files") from exc
+        raise Blocked("Agent must return a single strict JSON object with files or patches") from exc
+
+
+def resolve_patches(patches, snapshot):
+    """Apply patch operations to the current files.
+
+    A patch that names a file the snapshot does not hold, or an anchor that is
+    missing or ambiguous, is rejected instead of guessed. A wrong guess would
+    rewrite the wrong place, which is the failure this contract removes.
+    """
+    changes, costs = {}, {}
+    for path, operations in patches.items():
+        if not isinstance(operations, list) or not operations:
+            raise UnusableOutput("Patch operations must be a non-empty list: " + path)
+        if path not in snapshot:
+            raise UnusableOutput("Patch target is not among the current files: " + path)
+        content, authored = apply_patch(path, snapshot[path], operations)
+        changes[path] = content
+        costs[path] = authored
+    return Changes(changes, costs)
+
+
+def apply_patch(path, content, operations):
+    """Apply the operations of one patch to the current content of one file.
+
+    The operations run in order, each one against the result of the previous
+    one. The returned pair is the new content and the number of bytes the
+    model wrote, which is what the change budget is measured in.
+    """
+    authored = 0
+    for operation in operations:
+        if not isinstance(operation, dict):
+            raise UnusableOutput("Patch operation must be an object: " + path)
+        op = operation.get("op")
+        if op == "replace":
+            search, replace = operation.get("search"), operation.get("replace")
+            if not isinstance(search, str) or not isinstance(replace, str):
+                raise UnusableOutput("replace needs search and replace text: " + path)
+            content = replace_once(path, content, search, replace)
+            authored += len(replace.encode())
+        elif op == "insert_after":
+            search, text = operation.get("search"), operation.get("text")
+            if not isinstance(search, str) or not isinstance(text, str):
+                raise UnusableOutput("insert_after needs search and text: " + path)
+            content = replace_once(path, content, search, search + text)
+            authored += len(text.encode())
+        elif op == "prepend":
+            text = operation.get("text")
+            if not isinstance(text, str):
+                raise UnusableOutput("prepend needs text: " + path)
+            content = text + content
+            authored += len(text.encode())
+        elif op == "append":
+            text = operation.get("text")
+            if not isinstance(text, str):
+                raise UnusableOutput("append needs text: " + path)
+            content = content + text
+            authored += len(text.encode())
+        else:
+            raise UnusableOutput("Unknown patch operation %r: %s" % (op, path))
+    return content, authored
+
+
+def count_occurrences(content, search):
+    """How many places the anchor could match, counting overlapping matches.
+
+    str.count does not count overlapping occurrences: "aa" occurs twice in "aaa",
+    but count reports one. An anchor that could match in two places is ambiguous
+    even when the matches overlap, so every start position has to be counted.
+    """
+    total = 0
+    index = content.find(search)
+    while index != -1:
+        total += 1
+        index = content.find(search, index + 1)
+    return total
+
+
+def replace_once(path, content, search, replace):
+    """Replace one exact occurrence, and only if there is exactly one."""
+    if not search:
+        raise UnusableOutput("Patch anchor is empty: " + path)
+    count = count_occurrences(content, search)
+    if count != 1:
+        raise UnusableOutput("Patch anchor is not unique in %s: %d matches" % (path, count))
+    return content.replace(search, replace, 1)
 
 
 def dependencies(body):

@@ -2,11 +2,25 @@ import hashlib
 import json
 import time
 from datetime import datetime, timezone
-from .policy import (Blocked, UnusableOutput, dependencies, inspect_text, low_risk, matches,
+from .policy import (Blocked, UnusableOutput, accumulate_costs, dependencies, inspect_text, low_risk, matches,
                      redact, safe_path, validate_changes)
 from .review import ci_green, judge, reviewable
 
 TERMINAL = {"DONE", "BLOCKED"}
+
+
+def seeded_costs(data):
+    """The per-path cost a job had before the round that is being built.
+
+    A job that started before the costs were recorded holds the content it
+    published but no cost for it. Those paths are seeded with the size of what
+    was published, so the budget of such a job covers the work it already did
+    instead of starting over at the first repair.
+    """
+    costs = dict(data.get("costs") or {})
+    for path, content in (data.get("all_changes") or {}).items():
+        costs.setdefault(path, len(content.encode()))
+    return costs
 
 
 def redact_title(title):
@@ -281,7 +295,25 @@ class Engine:
             all_changes = {**data.get("all_changes", {}), **changes}
             if len(all_changes) > cfg.get("max_files", 5):
                 raise Blocked("Empty/oversized change set")
-            if sum(len(v.encode()) for v in all_changes.values()) > cfg.get("max_change_bytes", 50000):
+            # The budget is measured in the bytes the model wrote. A file that was
+            # patched costs what the patch cost, not what the file weighs, so a
+            # surgical change in a large file stays affordable. A file that was
+            # replaced in full costs what it weighs, as before.
+            #
+            # The costs of a path add up over the rounds of one job: a repair round
+            # writes to a file an earlier round already wrote, and the budget has to
+            # cover both. Counting only the latest round would let a job write twice
+            # its budget by splitting the work over two rounds.
+            #
+            # A job that started before the costs were recorded has no cost for the
+            # paths it already published, so those are seeded from what it published
+            # before the new round is added. Without that, the first repair of an
+            # older job would count only the repair and not the published work.
+            costs = accumulate_costs(seeded_costs(data), changes)
+            spent = 0
+            for path, content in all_changes.items():
+                spent += costs.get(path, len(content.encode()))
+            if spent > cfg.get("max_change_bytes", 50000):
                 raise Blocked("Change byte budget exceeded")
         except UnicodeEncodeError as exc:
             # A value that cannot be encoded as UTF-8 -- a lone surrogate in a JSON
@@ -427,8 +459,12 @@ class Engine:
             # alone left the model with no idea what it had been asked to fix.
             self.build(row, data, cfg, issue, feedback, repair=True)
             return
+        # The seeded costs are read before all_changes is replaced, so they describe
+        # the rounds that came before this one.
+        costs = accumulate_costs(seeded_costs(data), changes)
         data.update(changes=changes, all_changes=all_changes, parent=parent,
-                    date=datetime.now(timezone.utc).isoformat(), intent_sha=None)
+                    date=datetime.now(timezone.utc).isoformat(), intent_sha=None,
+                    costs=costs)
         self.store.save(row, "PUBLISHING", data)
 
     def publish(self, row, data):
