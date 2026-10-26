@@ -83,12 +83,19 @@ class PatchContractTests(unittest.TestCase):
         self.assertTrue(changes["docs/a.md"].endswith("bottom\n"))
 
     def test_patches_and_files_are_mutually_exclusive(self):
-        for text in ['{"files":{},"patches":{}}', '{"patches":{},"files":{}}',
-                     '{"patches":{"a":[]}}', '{"patches":{"a":{}}}']:
+        for text in ['{"patches":{"a":[]}}', '{"patches":{"a":{}}}']:
             with self.subTest(text=text), self.assertRaises(Blocked):
                 # A snapshot is given so that each answer reaches the check of the
                 # operation format, instead of stopping at the missing snapshot.
                 parse_changes(text, snapshot={"a": ""})
+
+    def test_a_path_cannot_be_both_written_and_patched(self):
+        with self.assertRaises(UnusableOutput) as raised:
+            parse_changes('{"files":{"docs/a.md":"new\\n"},'
+                           '"patches":{"docs/a.md":[{"op":"replace",'
+                           '"search":"PR: pull request.","replace":"x"}]}}',
+                           {"docs/a.md": ORIGINAL})
+        self.assertIn("cannot be both written and patched", str(raised.exception))
 
     def test_full_content_form_still_works(self):
         changes = parse_changes('{"files":{"docs/a.md":"new\\n"}}')

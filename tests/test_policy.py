@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from ado.config import load
-from ado.policy import (Blocked, dependencies, inspect_source, inspect_text, low_risk, parse_changes,
-                        redact, safe_path, validate_changes)
+from ado.policy import (Blocked, UnusableOutput, dependencies, inspect_source, inspect_text, low_risk,
+                        parse_changes, redact, safe_path, validate_changes)
 from tests.fakes import repo_config
 
 
@@ -127,9 +127,27 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(parse_changes('{"files":{"docs/a.md":"ok"}}'), {"docs/a.md": "ok"})
         for text in ['```json\n{}\n```', '{"files":{},"command":"whoami"}', '{"files":{},"files":{}}',
                      '{"files":{"a":"x","a":"y"}}', '[]', 'null',
-                     '{"files":{},"patches":{}}', '{"patches":{},"other":1}']:
+                     '{"patches":{},"other":1}']:
             with self.subTest(text=text), self.assertRaises(Blocked):
                 parse_changes(text)
+
+    def test_new_files_and_patches_can_be_answered_together(self):
+        # An issue that creates a file and changes another has to be answerable in
+        # one answer, or the first answer publishes half of the work.
+        changes = parse_changes('{"files":{"docs/new.md":"new\\n"},'
+                                '"patches":{"docs/old.md":[{"op":"replace",'
+                                '"search":"old","replace":"new"}]}}',
+                                {"docs/old.md": "old\n"})
+        self.assertEqual(changes["docs/new.md"], "new\n")
+        self.assertEqual(changes["docs/old.md"], "new\n")
+
+    def test_a_path_cannot_be_both_written_and_patched(self):
+        with self.assertRaises(UnusableOutput) as raised:
+            parse_changes('{"files":{"docs/a.md":"x\\n"},'
+                           '"patches":{"docs/a.md":[{"op":"replace",'
+                           '"search":"old","replace":"new"}]}}',
+                           {"docs/a.md": "old\n"})
+        self.assertIn("cannot be both written and patched", str(raised.exception))
 
     def test_dependencies(self):
         self.assertEqual(dependencies("Depends-On: #12, #13\nDepends-On: #12"), [12, 13])

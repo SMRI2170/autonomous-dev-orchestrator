@@ -221,10 +221,13 @@ def low_risk(changes, config):
 def parse_changes(output, snapshot=None):
     """Read the agent's answer.
 
-    Two shapes are accepted, and they are mutually exclusive:
+    These shapes are accepted:
 
     {"files": {"path": "complete content"}} -- the whole file is written.
     {"patches": {"path": [operations]}} -- only the changed parts are written.
+    {"files": {...}, "patches": {...}} -- both at once, for an issue that creates
+    a file and changes another. The two sets of paths must not overlap: a file
+    is either written whole or patched, never both.
 
     The returned mapping is the resolved content per path. A patch is resolved
     against the files that exist now, so the result is the file as it will be
@@ -239,17 +242,35 @@ def parse_changes(output, snapshot=None):
                 result[key] = val
             return result
         data = json.loads(output, object_pairs_hook=unique)
-        if set(data) == {"files"} and isinstance(data["files"], dict):
-            files = data["files"]
-            for content in files.values():
-                if not isinstance(content, str):
-                    raise ValueError("File content must be a string")
-            return Changes(files, {path: len(content.encode()) for path, content in files.items()})
-        if set(data) == {"patches"} and isinstance(data["patches"], dict):
+        keys = set(data)
+        if not keys or not keys <= {"files", "patches"}:
+            raise ValueError("Expected only files object or patches object")
+        files = data.get("files", {})
+        patches = data.get("patches", {})
+        if not isinstance(files, dict) or not isinstance(patches, dict):
+            raise ValueError("files and patches must be objects")
+        for content in files.values():
+            if not isinstance(content, str):
+                raise ValueError("File content must be a string")
+        overlap = set(files) & set(patches)
+        if overlap:
+            # A file that is written whole and patched at the same time has no
+            # defined result, so the answer is refused rather than guessed.
+            raise UnusableOutput("A path cannot be both written and patched: "
+                                  + ", ".join(sorted(overlap)))
+        resolved, costs = {}, {}
+        if patches:
             if snapshot is None:
                 raise ValueError("Patches need the current files")
-            return resolve_patches(data["patches"], snapshot)
-        raise ValueError("Expected only files object or patches object")
+            patched = resolve_patches(patches, snapshot)
+            resolved.update(patched)
+            costs.update(patched.costs)
+        for path, content in files.items():
+            resolved[path] = content
+            costs[path] = len(content.encode())
+        return Changes(resolved, costs)
+    except UnusableOutput:
+        raise
     except (ValueError, TypeError) as exc:
         raise Blocked("Agent must return a single strict JSON object with files or patches") from exc
 
