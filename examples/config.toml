@@ -30,6 +30,8 @@ allowed_paths = ["docs/**/*.md", "lib/**/*.dart", "test/**/*.dart"]
 context_paths = ["README.md"]
 max_files = 5
 max_context_bytes = 150000
+# The budget measures the bytes the model writes: a patch costs its payload, a full
+# replacement costs the whole file.
 max_change_bytes = 50000
 required_checks = [{name = "unit", app = "github-actions"}]
 # "minimax" runs a fresh tool-less local review with your existing subscription,

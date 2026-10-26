@@ -2,7 +2,7 @@ import hashlib
 import json
 import time
 from datetime import datetime, timezone
-from .policy import (Blocked, UnusableOutput, dependencies, inspect_text, low_risk, matches,
+from .policy import (Blocked, UnusableOutput, cost_of, dependencies, inspect_text, low_risk, matches,
                      redact, safe_path, validate_changes)
 from .review import ci_green, judge, reviewable
 
@@ -281,7 +281,17 @@ class Engine:
             all_changes = {**data.get("all_changes", {}), **changes}
             if len(all_changes) > cfg.get("max_files", 5):
                 raise Blocked("Empty/oversized change set")
-            if sum(len(v.encode()) for v in all_changes.values()) > cfg.get("max_change_bytes", 50000):
+            # The budget is measured in the bytes the model wrote. A file that was
+            # patched costs what the patch cost, not what the file weighs, so a
+            # surgical change in a large file stays affordable. A file that was
+            # replaced in full costs what it weighs, as before.
+            spent = 0
+            for path, content in all_changes.items():
+                if path in changes:
+                    spent += cost_of(changes, path, content)
+                else:
+                    spent += data.get("costs", {}).get(path, len(content.encode()))
+            if spent > cfg.get("max_change_bytes", 50000):
                 raise Blocked("Change byte budget exceeded")
         except UnicodeEncodeError as exc:
             # A value that cannot be encoded as UTF-8 -- a lone surrogate in a JSON
@@ -428,7 +438,8 @@ class Engine:
             self.build(row, data, cfg, issue, feedback, repair=True)
             return
         data.update(changes=changes, all_changes=all_changes, parent=parent,
-                    date=datetime.now(timezone.utc).isoformat(), intent_sha=None)
+                    date=datetime.now(timezone.utc).isoformat(), intent_sha=None,
+                    costs={**data.get("costs", {}), **getattr(changes, "costs", {})})
         self.store.save(row, "PUBLISHING", data)
 
     def publish(self, row, data):

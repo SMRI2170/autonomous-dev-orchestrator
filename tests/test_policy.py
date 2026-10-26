@@ -126,7 +126,8 @@ class PolicyTests(unittest.TestCase):
     def test_strict_agent_contract(self):
         self.assertEqual(parse_changes('{"files":{"docs/a.md":"ok"}}'), {"docs/a.md": "ok"})
         for text in ['```json\n{}\n```', '{"files":{},"command":"whoami"}', '{"files":{},"files":{}}',
-                     '{"files":{"a":"x","a":"y"}}', '[]', 'null']:
+                     '{"files":{"a":"x","a":"y"}}', '[]', 'null',
+                     '{"files":{},"patches":{}}', '{"patches":{},"other":1}']:
             with self.subTest(text=text), self.assertRaises(Blocked):
                 parse_changes(text)
 
