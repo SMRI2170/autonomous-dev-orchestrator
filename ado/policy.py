@@ -151,6 +151,19 @@ def cost_of(changes, path, content):
     return len(content.encode())
 
 
+def accumulate_costs(previous, changes):
+    """The per-path byte total of a job after one more answer.
+
+    A path can be written more than once in a job: a repair round rewrites what
+    an earlier round wrote. The budget must count both, or a job could spend
+    twice its budget on one file by splitting the work across rounds.
+    """
+    total = dict(previous or {})
+    for path, content in changes.items():
+        total[path] = total.get(path, 0) + cost_of(changes, path, content)
+    return total
+
+
 def validate_changes(changes, config, snapshot):
     if not isinstance(changes, dict) or not changes or len(changes) > config.get("max_files", 5):
         raise Blocked("Empty/oversized change set")
@@ -169,6 +182,34 @@ def validate_changes(changes, config, snapshot):
             raise Blocked("Unchanged file returned: " + path)
     if size > config.get("max_change_bytes", 50000):
         raise Blocked("Change byte budget exceeded")
+    context_limits(changes, config, snapshot)
+
+
+def context_limits(changes, config, snapshot):
+    """Check the resolved files against the limits the context will be read under.
+
+    A file that this job publishes is read back into the context of the next
+    round, and the reading applies limits: one per file, and one for the whole
+    context. A change that pushes a file or the context past those limits would
+    leave the job unable to continue after it published, so the limits are
+    checked here, where the model can still correct the change.
+    """
+    per_file = config.get("max_context_file_bytes", 50000)
+    total_budget = config.get("max_context_bytes", 300000)
+    total = 0
+    for path, content in changes.items():
+        written = len(content.encode())
+        if written > per_file:
+            raise Blocked("Resolved file exceeds the per-file context limit: %s (%d bytes > %d)"
+                          % (path, written, per_file))
+        total += written
+    for path, content in snapshot.items():
+        if path not in changes:
+            total += len(content.encode())
+    if total > total_budget:
+        raise Blocked("Context budget exceeded: %d bytes of context, budget %d; "
+                      "narrow allowed_paths/context_paths or raise max_context_bytes"
+                      % (total, total_budget))
 
 
 def low_risk(changes, config):
@@ -273,11 +314,26 @@ def apply_patch(path, content, operations):
     return content, authored
 
 
+def count_occurrences(content, search):
+    """How many places the anchor could match, counting overlapping matches.
+
+    str.count does not count overlapping occurrences: "aa" occurs twice in "aaa",
+    but count reports one. An anchor that could match in two places is ambiguous
+    even when the matches overlap, so every start position has to be counted.
+    """
+    total = 0
+    index = content.find(search)
+    while index != -1:
+        total += 1
+        index = content.find(search, index + 1)
+    return total
+
+
 def replace_once(path, content, search, replace):
     """Replace one exact occurrence, and only if there is exactly one."""
     if not search:
         raise UnusableOutput("Patch anchor is empty: " + path)
-    count = content.count(search)
+    count = count_occurrences(content, search)
     if count != 1:
         raise UnusableOutput("Patch anchor is not unique in %s: %d matches" % (path, count))
     return content.replace(search, replace, 1)

@@ -2,7 +2,7 @@ import hashlib
 import json
 import time
 from datetime import datetime, timezone
-from .policy import (Blocked, UnusableOutput, cost_of, dependencies, inspect_text, low_risk, matches,
+from .policy import (Blocked, UnusableOutput, accumulate_costs, dependencies, inspect_text, low_risk, matches,
                      redact, safe_path, validate_changes)
 from .review import ci_green, judge, reviewable
 
@@ -285,12 +285,15 @@ class Engine:
             # patched costs what the patch cost, not what the file weighs, so a
             # surgical change in a large file stays affordable. A file that was
             # replaced in full costs what it weighs, as before.
+            #
+            # The costs of a path add up over the rounds of one job: a repair round
+            # writes to a file an earlier round already wrote, and the budget has to
+            # cover both. Counting only the latest round would let a job write twice
+            # its budget by splitting the work over two rounds.
+            costs = accumulate_costs(data.get("costs", {}), changes)
             spent = 0
             for path, content in all_changes.items():
-                if path in changes:
-                    spent += cost_of(changes, path, content)
-                else:
-                    spent += data.get("costs", {}).get(path, len(content.encode()))
+                spent += costs.get(path, len(content.encode()))
             if spent > cfg.get("max_change_bytes", 50000):
                 raise Blocked("Change byte budget exceeded")
         except UnicodeEncodeError as exc:
@@ -439,7 +442,7 @@ class Engine:
             return
         data.update(changes=changes, all_changes=all_changes, parent=parent,
                     date=datetime.now(timezone.utc).isoformat(), intent_sha=None,
-                    costs={**data.get("costs", {}), **getattr(changes, "costs", {})})
+                    costs=accumulate_costs(data.get("costs", {}), changes))
         self.store.save(row, "PUBLISHING", data)
 
     def publish(self, row, data):
