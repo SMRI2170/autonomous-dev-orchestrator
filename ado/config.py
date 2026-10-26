@@ -48,10 +48,13 @@ def load(path):
         repo.setdefault("context_paths", ["README.md"])
         # The per-file limit bounds one file in the prompt. It is separate from the
         # total, so a large file can be edited when the total budget allows it.
-        repo.setdefault("max_context_file_bytes", 50000)
-        if type(repo.get("max_context_file_bytes")) is not int or \
-                not 1000 <= repo["max_context_file_bytes"] <= 2000000:
-            raise Blocked("Invalid max_context_file_bytes")
+        # The default is applied where the limit is read, not written into the
+        # configuration: a default written here would change the policy hash of a
+        # job that is already running, and the job would stop as changed.
+        if "max_context_file_bytes" in repo:
+            if type(repo["max_context_file_bytes"]) is not int or \
+                    not 1000 <= repo["max_context_file_bytes"] <= 2000000:
+                raise Blocked("Invalid max_context_file_bytes")
         if type(repo.get("auto_merge", False)) is not bool:
             raise Blocked("repository auto_merge must be boolean")
     # No API-key/provider fallback is implemented. Existing subscription login only.

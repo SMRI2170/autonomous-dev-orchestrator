@@ -149,6 +149,38 @@ trusted_authors = ["owner"]
             repo = load(path)["repositories"][0]
             self.assertNotIn("review_provider", repo)
 
+    def test_the_per_file_limit_default_does_not_change_the_policy_hash(self):
+        # Regression: writing the default into the configuration changed the policy
+        # hash of a job that was already running, and the job stopped as changed.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text('''[[repositories]]
+name = "owner/project"
+allowed_paths = ["docs/**/*.md"]
+trusted_authors = ["owner"]
+''')
+            repo = load(path)["repositories"][0]
+            self.assertNotIn("max_context_file_bytes", repo)
+
+    def test_the_per_file_limit_is_validated_when_it_is_given(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text('''[[repositories]]
+name = "owner/project"
+allowed_paths = ["docs/**/*.md"]
+trusted_authors = ["owner"]
+max_context_file_bytes = 120000
+''')
+            self.assertEqual(load(path)["repositories"][0]["max_context_file_bytes"], 120000)
+            path.write_text('''[[repositories]]
+name = "owner/project"
+allowed_paths = ["docs/**/*.md"]
+trusted_authors = ["owner"]
+max_context_file_bytes = 10
+''')
+            with self.assertRaises(Blocked):
+                load(path)
+
     def test_review_provider_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"

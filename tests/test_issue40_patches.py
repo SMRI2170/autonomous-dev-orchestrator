@@ -86,7 +86,9 @@ class PatchContractTests(unittest.TestCase):
         for text in ['{"files":{},"patches":{}}', '{"patches":{},"files":{}}',
                      '{"patches":{"a":[]}}', '{"patches":{"a":{}}}']:
             with self.subTest(text=text), self.assertRaises(Blocked):
-                parse_changes(text)
+                # A snapshot is given so that each answer reaches the check of the
+                # operation format, instead of stopping at the missing snapshot.
+                parse_changes(text, snapshot={"a": ""})
 
     def test_full_content_form_still_works(self):
         changes = parse_changes('{"files":{"docs/a.md":"new\\n"}}')
